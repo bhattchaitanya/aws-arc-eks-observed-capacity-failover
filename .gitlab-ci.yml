@@ -1,0 +1,49 @@
+stages:
+  - validate
+  - deploy
+  - experiment
+  - teardown
+
+shellcheck:
+  stage: validate
+  image: koalaman/shellcheck-alpine:stable
+  script:
+    - shellcheck scripts/*.sh
+
+manifest-validation:
+  stage: validate
+  image: alpine/k8s:1.33.1
+  script:
+    - apk add --no-cache gettext
+    - cp config.env.example config.env
+    - set -a
+    - . ./config.env
+    - set +a
+    - |
+      DEPLOY_REGION="$PRIMARY_REGION" envsubst < k8s/application.yaml.tpl
+        | kubectl apply --dry-run=client --validate=false -f -
+
+deploy:
+  stage: deploy
+  when: manual
+  script:
+    - ./scripts/deploy.sh
+
+prime-and-create-plan:
+  stage: experiment
+  when: manual
+  script:
+    - ./scripts/prime-and-create-plan.sh
+
+failover:
+  stage: experiment
+  when: manual
+  script:
+    - ./scripts/failover.sh
+
+teardown:
+  stage: teardown
+  when: manual
+  allow_failure: false
+  script:
+    - ./scripts/teardown.sh

@@ -1,0 +1,38 @@
+flowchart TB
+  Client["Clients / 1,000 TPS load"]
+  DNS["Route 53 weighted CNAMEs<br/>Oregon 100 · Ohio 0<br/>ARC-vended health checks"]
+  ARC["ARC Region Switch<br/>one active/passive plan"]
+  CW["CloudWatch availability<br/>success ÷ total × 100"]
+  Gate["Optional Lambda gate<br/>fail-open on missing data<br/>skipped in ungraceful mode"]
+
+  subgraph Regions["Application data plane"]
+    direction LR
+    subgraph West["us-west-2 — active before failover"]
+      WNLB["Public NLB"]
+      WEKS["EKS Auto Mode<br/>HPA ceiling 40"]
+      WPods["20 ready API pods<br/>observed source maximum"]
+      WDDB["DynamoDB local replica"]
+      WNLB --> WPods
+      WEKS --> WPods
+      WPods --> WDDB
+    end
+
+    subgraph East["us-east-2 — standby before failover"]
+      ENLB["Public NLB"]
+      EEKS["EKS Auto Mode<br/>HPA ceiling 40"]
+      EPods["1 ready API pod<br/>then ARC pre-scales to 20"]
+      EDDB["DynamoDB local replica"]
+      ENLB --> EPods
+      EEKS --> EPods
+      EPods --> EDDB
+    end
+  end
+
+  Client --> DNS
+  DNS --> WNLB
+  DNS -. "after health-state flip" .-> ENLB
+  CW -. "graceful only" .-> Gate
+  Gate -. "custom action" .-> ARC
+  ARC -->|"1 · sampledMaxInLast24Hours<br/>targetPercent 100 → 20"| EEKS
+  ARC -->|"2 · switch health-check states"| DNS
+  WDDB <-->|"Global Tables replication"| EDDB

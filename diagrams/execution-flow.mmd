@@ -1,0 +1,24 @@
+flowchart TD
+  Q["Quota + cost gate passes<br/>complete target state"]
+  A["Hold Oregon at 20 ready replicas<br/>and run 1,000 TPS"]
+  B["Create one ARC plan<br/>sampledMaxInLast24Hours · 100%"]
+  C{"30-minute plan evaluation<br/>history usable, no active warning?"}
+  D["Stop: failover script refuses to run"]
+  E["Start activation of us-east-2"]
+  F{"Execution mode?"}
+  G["Graceful<br/>Lambda reads availability alarm"]
+  H["Ungraceful<br/>ARC skips Lambda dependency"]
+  I["Recovery target = 100% ×<br/>observed replica maximum = 20"]
+  J["Patch Ohio Deployment/HPA<br/>and wait for ready replicas"]
+  K["EKS Auto Mode provisions<br/>m7i.xlarge nodes as needed"]
+  L["Only after capacity is ready:<br/>flip ARC health-check states"]
+  M["Route 53 stops returning Oregon<br/>and serves the Ohio zero-weight record"]
+  N["Verify 20 ready Ohio pods,<br/>Ohio response, and local DDB replica"]
+
+  Q --> A --> B --> C
+  C -- No --> D
+  C -- Yes --> E --> F
+  F -- graceful --> G --> I
+  F -- ungraceful --> H --> I
+  I --> J --> K --> J
+  J --> L --> M --> N
