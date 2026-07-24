@@ -1,0 +1,14 @@
+{
+  "name": "arc-eks-observed-capacity-gatling",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test:load": "gatling run --simulation arc-failover"
+  },
+  "devDependencies": {
+    "@gatling.io/cli": "3.15.103",
+    "@gatling.io/core": "3.15.103",
+    "@gatling.io/http": "3.15.103"
+  }
+}

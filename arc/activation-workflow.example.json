@@ -1,0 +1,95 @@
+{
+  "workflowTargetRegion": "us-east-2",
+  "workflowTargetAction": "activate",
+  "workflowDescription": "Activate Ohio from Oregon",
+  "steps": [
+    {
+      "name": "Availability signal gate",
+      "description": "Graceful mode checks CloudWatch; missing data fails open. Ungraceful mode skips this dependency.",
+      "executionBlockType": "CustomActionLambda",
+      "executionBlockConfiguration": {
+        "customActionLambdaConfig": {
+          "lambdas": [
+            {
+              "arn": "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:arc-eks-24h-availability-gate"
+            },
+            {
+              "arn": "arn:aws:lambda:us-east-2:ACCOUNT_ID:function:arc-eks-24h-availability-gate"
+            }
+          ],
+          "retryIntervalMinutes": 0.5,
+          "regionToRun": "activatingRegion",
+          "timeoutMinutes": 2,
+          "ungraceful": {
+            "behavior": "skip"
+          }
+        }
+      }
+    },
+    {
+      "name": "Pre-scale EKS to observed 24-hour maximum",
+      "description": "Match 100 percent of ARC sampled max; do not use HPA max as the recovery target.",
+      "executionBlockType": "EKSResourceScaling",
+      "executionBlockConfiguration": {
+        "eksResourceScalingConfig": {
+          "kubernetesResourceType": {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment"
+          },
+          "timeoutMinutes": 25,
+          "scalingResources": [
+            {
+              "arc-transaction-api": {
+                "us-east-2": {
+                  "namespace": "arc-lab",
+                  "name": "arc-transaction-api",
+                  "hpaName": "arc-transaction-api"
+                },
+                "us-west-2": {
+                  "namespace": "arc-lab",
+                  "name": "arc-transaction-api",
+                  "hpaName": "arc-transaction-api"
+                }
+              }
+            }
+          ],
+          "eksClusters": [
+            {
+              "clusterArn": "arn:aws:eks:us-west-2:ACCOUNT_ID:cluster/arc-eks-24h-west"
+            },
+            {
+              "clusterArn": "arn:aws:eks:us-east-2:ACCOUNT_ID:cluster/arc-eks-24h-east"
+            }
+          ],
+          "ungraceful": {
+            "minimumSuccessPercentage": 99
+          },
+          "targetPercent": 100,
+          "capacityMonitoringApproach": "sampledMaxInLast24Hours"
+        }
+      }
+    },
+    {
+      "name": "Shift Route 53 traffic to activating Region",
+      "description": "ARC changes highly available health-check state; weighted records remain 100 West and 0 East.",
+      "executionBlockType": "Route53HealthCheck",
+      "executionBlockConfiguration": {
+        "route53HealthCheckConfig": {
+          "hostedZoneId": "HOSTED_ZONE_ID",
+          "recordName": "arc-eks-24h.example.com",
+          "timeoutMinutes": 5,
+          "recordSets": [
+            {
+              "recordSetIdentifier": "us-west-2-primary",
+              "region": "us-west-2"
+            },
+            {
+              "recordSetIdentifier": "us-east-2-standby",
+              "region": "us-east-2"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

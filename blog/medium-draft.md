@@ -16,23 +16,17 @@ Amazon Application Recovery Controller (ARC) Region Switch has a useful middle g
 
 [AWS documents the EKS scaling block and its sampled-capacity behavior here](https://docs.aws.amazon.com/r53recovery/latest/dg/eks-resource-scaling-block.html).
 
-![Observed-capacity recovery target compared with the HPA ceiling](../diagrams/capacity-model.png)
+![Capacity-first two-Region EKS recovery architecture](../diagrams/architecture-medium.png)
 
-*Observed-capacity recovery: ARC turns a one-pod warm standby into the demonstrated 20-pod recovery target without blindly scaling to the 40-pod HPA ceiling.*
+*The architecture is intentionally simple: ARC applies an optional policy gate, restores the demonstrated 20-pod capacity in Ohio, waits for readiness, and only then changes the Route 53 health state. DynamoDB Global Tables keeps the data plane active/active.*
 
-[Image: A labeled capacity path compares one warm-standby pod, ARC’s observed 20-pod maximum, the resulting 20-pod recovery target, and the intentionally unused 40-pod HPA ceiling.]
+[Image: A clean two-Region architecture diagram showing the ARC policy, capacity, and traffic sequence; Oregon and Ohio EKS services; local DynamoDB replicas; the one-to-20-pod recovery; and the intentionally unused 40-pod HPA ceiling.]
 
 The resilience property I wanted to test was what this recovery path does *not* require. ARC does not need to discover the target from a live CloudWatch CPU graph during the incident. It already has the replica history. That matters when a regional impairment also makes normal observability incomplete or unavailable.
 
 The experiment question was:
 
 > Can ARC take a one-pod Ohio standby, recover it to the maximum replica count observed in Oregon during the previous 24 hours, prove all 20 destination pods are ready, and only then move traffic—without requiring a live CloudWatch utilization query in the ungraceful recovery path?
-
-![Two-Region ARC and EKS architecture](../diagrams/architecture.png)
-
-*Two-Region recovery architecture: ARC pre-scales the Ohio EKS service from one to 20 ready pods before its Route 53 health-state block moves traffic; DynamoDB Global Tables keeps a local data replica in both Regions.*
-
-[Image: Labeled two-Region architecture showing clients, Route 53, Oregon and Ohio EKS clusters, local DynamoDB replicas, the ARC control plane, the optional CloudWatch availability gate, and capacity-first recovery.]
 
 ## The recovery contract
 
@@ -84,11 +78,11 @@ The Ohio activation workflow contains three ordered execution blocks:
 
 That order is the design: policy first, capacity second, traffic third.
 
-![ARC custom execution block and recovery composition](../diagrams/custom-execution-block.png)
+![Live ARC plan workflow with three annotated execution blocks](../evidence/screenshots/arc-plan-annotated.png)
 
-*The complete ARC execution contract: the custom availability policy has separate graceful and ungraceful paths, EKS observed-capacity scaling completes next, and Route 53 traffic control runs only after destination readiness.*
+*The live ARC workflow builder shows the actual order: custom Lambda policy, EKS observed-capacity scaling, then Route 53 traffic control.*
 
-[Image: Labeled ARC activation workflow showing the graceful CloudWatch availability gate, ungraceful skip behavior, fail-open branch, IAM dependencies, EKS pre-scaling, Route 53 health-state switch, and final data-plane validation.]
+[Image: An annotated real AWS ARC workflow-builder screenshot with numbered callouts on the Lambda, EKS scaling, and Route 53 health-check execution blocks.]
 
 ### Block 1: the custom Lambda execution block
 
@@ -157,6 +151,18 @@ This policy is not universally correct. Some organizations will prefer fail-clos
 
 The actual experiment used `mode: ungraceful`. ARC recorded the custom block as completed in about five seconds under its configured skip behavior, so the failover did not depend on Lambda or CloudWatch being usable.
 
+![Live Lambda editor showing the custom availability gate](../evidence/screenshots/lambda-code-annotated.png)
+
+*The real Lambda deployed in both Regions. The code reads the availability alarm, raises on `ALARM`, and has an explicit fail-open branch for a CloudWatch API failure. The ARC plan—not the function—defines the ungraceful `skip`.*
+
+[Image: An annotated live AWS Lambda editor screenshot pointing to the CloudWatch alarm lookup, ALARM rejection, and fail-open exception branch.]
+
+![Live CloudWatch availability alarm and threshold](../evidence/screenshots/cloudwatch-availability-annotated.png)
+
+*The live `AvailabilityPercent` alarm uses a 97% threshold. The screenshot was taken after the load stopped, so it also shows the expected `INSUFFICIENT_DATA` state that the ungraceful recovery path must tolerate.*
+
+[Image: An annotated real CloudWatch alarm screenshot with the 97% threshold, 100% run datapoints, and the post-test insufficient-data state.]
+
 #### The IAM composition behind the custom block
 
 Three separate permission layers are involved:
@@ -202,6 +208,18 @@ During execution, ARC retrieved its sampled replica maximum, set the Ohio Deploy
 
 This block completed in **29.35 seconds**, moving Ohio from **1 ready pod to 20 ready pods**.
 
+![Live ARC EKS scaling-step configuration](../evidence/screenshots/arc-execution-annotated.png)
+
+*The completed execution exposes the settings that matter: `targetPercent` 100, `sampledMaxInLast24Hours`, a 99% ungraceful success threshold, and all three steps completed.*
+
+[Image: An annotated real ARC execution screenshot showing all three completed steps, the 100% target, the sampled 24-hour maximum, and covered AWS account identifiers.]
+
+![Live ARC event log showing the observed 20-replica event](../evidence/screenshots/arc-execution-event-annotated.png)
+
+*ARC’s event log records that it found 20 source replicas using `sampledMaxInLast24Hours`, sent the scale request, completed the EKS block, and only then completed the Route 53 block.*
+
+[Image: An annotated real ARC plan-execution event-log screenshot calling out the message that 20 replicas were found from the sampled 24-hour history.]
+
 ### Block 3: Route 53 traffic control
 
 The final block uses the Route 53 health checks that ARC allocates for the record name:
@@ -211,8 +229,8 @@ The final block uses the Route 53 health checks that ARC allocates for the recor
   "executionBlockType": "Route53HealthCheck",
   "executionBlockConfiguration": {
     "route53HealthCheckConfig": {
-      "hostedZoneId": "Z07811951AS9O1UJW9VDX",
-      "recordName": "arc-eks-24h.arc-demo.example",
+      "hostedZoneId": "HOSTED_ZONE_ID",
+      "recordName": "arc-eks-24h.example.com",
       "recordSets": [
         {
           "recordSetIdentifier": "us-west-2-primary",
@@ -255,7 +273,7 @@ The first evaluation briefly reported that replica history was not yet available
 
 This ordering avoids creating a “24-hour maximum” plan whose only meaningful sample is the standby-like one-pod state.
 
-## The GitLab and SDK workflow
+## The GitLab, SDK, and evidence workflow
 
 The repository includes a GitLab CI pipeline and two operator surfaces:
 
@@ -296,6 +314,27 @@ The source load generator was configured for 1,000 TPS and achieved **811.40 req
 
 That is comfortably above the 97% availability threshold. The load generator did not reach the configured 1,000-TPS target, so I am reporting the achieved rate rather than labeling the run as a 1,000-TPS result.
 
+### A separate Gatling verification
+
+The failover run itself used `hey` inside Kubernetes. I did not relabel that output as Gatling. After the ARC execution, I ran a separate, real Gatling Community Edition verification directly against the already pre-scaled Ohio NLB:
+
+- Open workload model.
+- 15-second ramp from 100 to 1,000 arrivals/second.
+- 45-second plateau at 1,000 arrivals/second.
+- **53,250 total requests**.
+- **53,248 successes and 2 premature closes**.
+- **99.9962% success**.
+- **858.87 requests/second overall**, because Gatling includes the ramp in the one-minute average.
+- 211 ms median, 4.027 s p95, and 7.461 s p99.
+
+This is a useful distinction. The profile reached and held a 1,000-arrivals/second injection plateau, but the full-run average was lower because the first 15 seconds intentionally ramped. The initial constant-rate attempt also exposed a local load-generator file-descriptor problem; adding a gradual ramp prevented that client-side artifact from being misreported as an EKS capacity result.
+
+![Real Gatling Community Edition report](../evidence/screenshots/gatling-report-annotated.png)
+
+*The real Gatling HTML report: 53,250 requests, two errors, and the lower injection chart ramping to a flat 1,000-arrivals/second plateau.*
+
+[Image: An annotated real Gatling report screenshot with request totals, response-time percentiles, two errors, and the 1,000-arrivals-per-second injection plateau.]
+
 The ARC execution then produced:
 
 | Phase | Result |
@@ -311,12 +350,6 @@ The ARC execution then produced:
 | Destination DynamoDB proof | local read returned `ddb_key: item-2` |
 
 The ARC execution state was `completed`. A direct request to the Ohio NLB returned from an Ohio pod with a DynamoDB key and 29.05 ms application-reported latency.
-
-![ARC Region Switch execution flow](../diagrams/execution-flow.png)
-
-*Measured recovery sequence: the quota and cost gate, 24-hour history evaluation, EKS pre-scale, Route 53 health-state switch, and data-plane proof all completed in the intended order.*
-
-[Image: Labeled four-phase ARC execution flow with the measured 3.67-minute history gate, 5.05-second custom-block skip, 29.35-second EKS scale-up, 120.88-second routing step, and 2.76-minute completed execution.]
 
 ## What this proves—and what it does not
 

@@ -13,6 +13,8 @@ This experiment demonstrates an Amazon Application Recovery Controller Region Sw
 - Executes failover in ungraceful mode so the optional CloudWatch availability gate is skipped.
 - Uses ARC-vended Route 53 health checks attached to weighted records.
 
+![Capacity-first two-Region architecture](diagrams/architecture-medium.png)
+
 ## Cost envelope
 
 The modeled ready-state cost is about **$1.45/hour** and the temporary failover peak is about **$2.20/hour**, including two EKS control planes, EKS Auto Mode compute and management fees, one NAT gateway per Region, one ARC plan, two NLBs, Route 53 health checks, and the 1,000 TPS test mix of eventually consistent reads plus 1% replicated writes. Data transfer and unusually large responses would add variable cost.
@@ -43,9 +45,11 @@ account. Job artifacts carry the non-secret `.state` evidence between isolated
 runners, and a shared `resource_group` prevents overlapping infrastructure
 mutations.
 
-## SDK-driven evidence
+## SDK-driven execution and evidence
 
-The live experiment was executed and verified without console screenshots:
+The live experiment was executed and verified with the AWS and Kubernetes
+SDKs. The console screenshots in `evidence/screenshots/` were captured
+afterward as read-only, annotated proof for the accompanying article:
 
 ```bash
 python3 -m venv .state/venv
@@ -68,3 +72,19 @@ minutes.
 The temporary SDK access key has been deleted. The ARC plan and both
 `arc-eks-24h-availability-gate` Lambda functions are intentionally retained for
 review. Do not fail back, scale down, or tear down without explicit approval.
+
+## Reproducible artifacts
+
+- `arc/activation-workflow.example.json` is the sanitized three-block ARC
+  activation workflow.
+- `lambda/availability_gate.py` is the custom Lambda policy gate.
+- `load-test/gatling/src/arc-failover.gatling.js` is the parameterized Gatling
+  verification.
+- `evidence/experiment-result.json` is the sanitized SDK-run result.
+- `evidence/gatling-summary.json` is the sanitized Gatling result.
+- `evidence/screenshots/` contains annotated, publication-safe evidence images.
+
+The Gatling verification ramps from 100 to 1,000 arrivals/second over 15
+seconds, then holds 1,000 for 45 seconds. The captured run completed 53,250
+requests with 53,248 successes and two premature closes. Its overall 858.87
+requests/second includes the ramp period.

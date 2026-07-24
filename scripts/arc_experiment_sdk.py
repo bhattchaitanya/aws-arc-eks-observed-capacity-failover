@@ -22,7 +22,7 @@ from kubernetes import client as kubernetes_client
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / ".state"
 CREDENTIALS_FILE = STATE_DIR / "sdk-credentials.json"
-EXPECTED_ACCOUNT = "345882051641"
+EXPECTED_ACCOUNT = os.environ.get("ACCOUNT_ID", "YOUR_AWS_ACCOUNT_ID")
 PRIMARY_REGION = "us-west-2"
 STANDBY_REGION = "us-east-2"
 PRIMARY_CLUSTER = "arc-eks-24h-west"
@@ -32,8 +32,8 @@ APPLICATION = "arc-transaction-api"
 TABLE_NAME = "arc-eks-24h-transactions"
 PLAN_NAME = "arc-eks-24h-observed-capacity"
 PLAN_REGION = STANDBY_REGION
-HOSTED_ZONE_ID = "Z07811951AS9O1UJW9VDX"
-RECORD_NAME = "arc-eks-24h.arc-demo.example."
+HOSTED_ZONE_ID = os.environ.get("HOSTED_ZONE_ID", "YOUR_HOSTED_ZONE_ID")
+RECORD_NAME = os.environ.get("RECORD_NAME", "arc-eks-24h.example.com").rstrip(".") + "."
 OBSERVED_PEAK = 20
 HPA_MAXIMUM = 40
 

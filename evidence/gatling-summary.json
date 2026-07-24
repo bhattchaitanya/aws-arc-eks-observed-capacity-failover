@@ -1,0 +1,37 @@
+{
+  "capturedAt": "2026-07-24T22:37:40Z",
+  "tool": "Gatling Community Edition 3.15.1",
+  "target": "Ohio destination NLB (hostname intentionally omitted)",
+  "injectionProfile": {
+    "model": "open",
+    "ramp": {
+      "fromArrivalsPerSecond": 100,
+      "toArrivalsPerSecond": 1000,
+      "durationSeconds": 15
+    },
+    "plateau": {
+      "arrivalsPerSecond": 1000,
+      "durationSeconds": 45
+    }
+  },
+  "results": {
+    "durationSeconds": 61,
+    "totalRequests": 53250,
+    "successfulRequests": 53248,
+    "failedRequests": 2,
+    "successPercent": 99.9962,
+    "overallRequestsPerSecondIncludingRamp": 858.87,
+    "responseTimeMs": {
+      "minimum": 148,
+      "p50": 211,
+      "p75": 258,
+      "p95": 4027,
+      "p99": 7461,
+      "maximum": 21664,
+      "mean": 671
+    },
+    "errors": {
+      "PrematureCloseException": 2
+    }
+  }
+}

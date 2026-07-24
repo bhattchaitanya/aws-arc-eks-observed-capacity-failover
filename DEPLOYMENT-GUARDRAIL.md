@@ -1,6 +1,7 @@
 # Deployment guardrail
 
-This lab is authorized only in AWS account `345882051641`, using:
+This lab is authorized only in the AWS account explicitly placed in
+`config.env` as `ACCOUNT_ID`, using:
 
 - `us-west-2`: EKS cluster `arc-eks-24h-west`
 - `us-east-2`: EKS cluster `arc-eks-24h-east`
