@@ -5,6 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 assert_account
+prime_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+for command_name in aws jq kubectl; do
+  require_command "${command_name}"
+done
+
+aws eks update-kubeconfig \
+  --region "${PRIMARY_REGION}" \
+  --name "${PRIMARY_CLUSTER}" \
+  --alias arc-west
+aws eks update-kubeconfig \
+  --region "${STANDBY_REGION}" \
+  --name "${STANDBY_CLUSTER}" \
+  --alias arc-east
 
 for state_file in load-balancers.json arc-resources.json; do
   [[ -f "${STATE_DIR}/${state_file}" ]] || {
@@ -37,25 +51,72 @@ if [[ "${ready_replicas}" -lt "${OBSERVED_PEAK_REPLICAS}" ]]; then
 fi
 
 west_lb="$(jq -r '.west' "${STATE_DIR}/load-balancers.json")"
-if ! command -v hey >/dev/null 2>&1; then
-  machine_arch="$(uname -m)"
-  case "${machine_arch}" in
-    x86_64) hey_arch="amd64" ;;
-    aarch64|arm64) hey_arch="arm64" ;;
-    *) echo "Unsupported architecture: ${machine_arch}" >&2; exit 1 ;;
-  esac
-  curl --silent --location \
-    "https://hey-release.s3.us-east-2.amazonaws.com/hey_linux_${hey_arch}" \
-    --output "${STATE_DIR}/hey"
-  chmod +x "${STATE_DIR}/hey"
-  export PATH="${STATE_DIR}:${PATH}"
+load_job="arc-observed-capacity-load"
+if [[ "${REUSE_VALID_LOAD:-false}" == "true" ]] \
+  && [[ -s "${STATE_DIR}/west-load-test.txt" ]] \
+  && jq -e \
+    '(.totalAttempts // .total) > 0
+      and .successes > 0
+      and .availabilityPercent >= 97' \
+    "${STATE_DIR}/west-availability.json" \
+    >/dev/null 2>&1; then
+  echo "Reusing the prior valid West load evidence while 20 replicas remain ready"
+else
+kubectl --context arc-west \
+  -n "${NAMESPACE}" \
+  delete job "${load_job}" \
+  --ignore-not-found=true \
+  --wait=true \
+  >/dev/null
+jq -n \
+  --arg namespace "${NAMESPACE}" \
+  --arg job "${load_job}" \
+  --arg duration "${LOAD_TEST_DURATION}" \
+  --arg endpoint "http://${west_lb}/" \
+  '{
+    apiVersion:"batch/v1",
+    kind:"Job",
+    metadata:{name:$job,namespace:$namespace},
+    spec:{
+      backoffLimit:0,
+      ttlSecondsAfterFinished:600,
+      template:{
+        metadata:{labels:{app:$job}},
+        spec:{
+          restartPolicy:"Never",
+          nodeSelector:{"node.kubernetes.io/instance-type":"m7i.xlarge"},
+          containers:[{
+            name:"hey",
+            image:"alpine:3.22",
+            command:["/bin/sh","-c"],
+            args:[(
+              "set -eu; " +
+              "wget -q https://storage.googleapis.com/hey-releases/hey_linux_amd64 -O /tmp/hey; " +
+              "chmod +x /tmp/hey; " +
+              "/tmp/hey -z " + $duration + " -c 100 -q 10 " + $endpoint
+            )],
+            resources:{
+              requests:{cpu:"1",memory:"512Mi"},
+              limits:{cpu:"2",memory:"1Gi"}
+            }
+          }]
+        }
+      }
+    }
+  }' > "${STATE_DIR}/load-job.json"
+kubectl --context arc-west apply -f "${STATE_DIR}/load-job.json"
+if ! kubectl --context arc-west \
+  -n "${NAMESPACE}" \
+  wait \
+  --for=condition=complete \
+  "job/${load_job}" \
+  --timeout=10m; then
+  kubectl --context arc-west -n "${NAMESPACE}" logs "job/${load_job}" >&2 || true
+  exit 1
 fi
-
-hey \
-  -z "${LOAD_TEST_DURATION}" \
-  -c 100 \
-  -q 10 \
-  "http://${west_lb}/" \
+kubectl --context arc-west \
+  -n "${NAMESPACE}" \
+  logs "job/${load_job}" \
   | tee "${STATE_DIR}/west-load-test.txt"
 
 west_successes="$(awk '
@@ -64,15 +125,27 @@ west_successes="$(awk '
 ' "${STATE_DIR}/west-load-test.txt")"
 west_total_responses="$(awk '
   /Status code distribution:/ {capture=1; next}
+  /Error distribution:/ {capture=0}
   capture && $1 ~ /^\[[0-9]+\]$/ {sum += $2}
+  END {print sum + 0}
+' "${STATE_DIR}/west-load-test.txt")"
+west_transport_errors="$(awk '
+  /Error distribution:/ {capture=1; next}
+  capture && $1 ~ /^\[[0-9]+\]$/ {
+    count=$1
+    gsub(/[][]/, "", count)
+    sum += count
+  }
   END {print sum + 0}
 ' "${STATE_DIR}/west-load-test.txt")"
 if [[ -z "${west_successes}" || "${west_total_responses}" -eq 0 ]]; then
   echo "The 1,000 TPS West load test did not report HTTP 200 responses" >&2
   exit 1
 fi
-west_availability="$(awk -v ok="${west_successes}" -v total="${west_total_responses}" \
+west_total_attempts="$((west_total_responses + west_transport_errors))"
+west_availability="$(awk -v ok="${west_successes}" -v total="${west_total_attempts}" \
   'BEGIN {printf "%.4f", (ok / total) * 100}')"
+west_requests_per_second="$(awk '/Requests\/sec:/ {print $2; exit}' "${STATE_DIR}/west-load-test.txt")"
 aws cloudwatch put-metric-data \
   --region "${PRIMARY_REGION}" \
   --namespace ArcEks24hLab \
@@ -80,10 +153,21 @@ aws cloudwatch put-metric-data \
   "MetricName=AvailabilityPercent,Dimensions=[{Name=Service,Value=${APP_NAME}},{Name=Region,Value=${PRIMARY_REGION}}],Value=${west_availability},Unit=Percent"
 jq -n \
   --argjson successes "${west_successes}" \
-  --argjson total "${west_total_responses}" \
+  --argjson httpResponses "${west_total_responses}" \
+  --argjson transportErrors "${west_transport_errors}" \
+  --argjson total "${west_total_attempts}" \
   --argjson availability "${west_availability}" \
-  '{successes:$successes,total:$total,availabilityPercent:$availability}' \
+  --argjson requestsPerSecond "${west_requests_per_second}" \
+  '{
+    successes:$successes,
+    httpResponses:$httpResponses,
+    transportErrors:$transportErrors,
+    totalAttempts:$total,
+    availabilityPercent:$availability,
+    requestsPerSecond:$requestsPerSecond
+  }' \
   > "${STATE_DIR}/west-availability.json"
+fi
 
 west_cluster_arn="$(jq -r '.westClusterArn' "${STATE_DIR}/arc-resources.json")"
 east_cluster_arn="$(jq -r '.eastClusterArn' "${STATE_DIR}/arc-resources.json")"
@@ -144,9 +228,8 @@ jq -n \
   --arg zone "${HOSTED_ZONE_ID}" \
   --arg record "${RECORD_NAME}" \
   --argjson targetPercent "${TARGET_PERCENT}" \
-  '{
-    description:$description,
-    workflows:[{
+  'def activationWorkflow($targetRegion; $workflowDescription):
+    {
       steps:[
         {
           name:"Availability signal gate",
@@ -178,7 +261,7 @@ jq -n \
                 }
               ],
               eksClusters:[{clusterArn:$westCluster},{clusterArn:$eastCluster}],
-              ungraceful:{minimumSuccessPercentage:100},
+              ungraceful:{minimumSuccessPercentage:99},
               targetPercent:$targetPercent,
               capacityMonitoringApproach:"sampledMaxInLast24Hours"
             }
@@ -186,7 +269,7 @@ jq -n \
           executionBlockType:"EKSResourceScaling"
         },
         {
-          name:"Shift Route 53 traffic to Ohio",
+          name:"Shift Route 53 traffic to activating Region",
           description:"ARC changes highly available health-check state; weighted records remain 100 West and 0 East.",
           executionBlockConfiguration:{
             route53HealthCheckConfig:{
@@ -203,9 +286,15 @@ jq -n \
         }
       ],
       workflowTargetAction:"activate",
-      workflowTargetRegion:$standby,
-      workflowDescription:"Activate Ohio from Oregon"
-    }],
+      workflowTargetRegion:$targetRegion,
+      workflowDescription:$workflowDescription
+    };
+  {
+    description:$description,
+    workflows:[
+      activationWorkflow($standby; "Activate Ohio from Oregon"),
+      activationWorkflow($primary; "Activate Oregon from Ohio")
+    ],
     executionRole:$role,
     recoveryTimeObjectiveMinutes:30,
     name:$name,
@@ -227,9 +316,22 @@ if [[ "${plan_arn}" == "None" || -z "${plan_arn}" ]]; then
     --output text)"
 fi
 printf '%s\n' "${plan_arn}" > "${STATE_DIR}/plan-arn.txt"
+plan_created_epoch="$(date +%s)"
+plan_created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-wait_for_command 40 15 bash -c \
-  "aws arc-region-switch list-route53-health-checks --region '${PLAN_CONTROL_REGION}' --arn '${plan_arn}' --hosted-zone-id '${HOSTED_ZONE_ID}' --record-name '${RECORD_NAME}' --query 'length(healthChecks)' --output text | grep -q '^2$'"
+arc_health_checks_are_ready() {
+  aws arc-region-switch list-route53-health-checks \
+    --region "${PLAN_CONTROL_REGION}" \
+    --arn "${plan_arn}" \
+    --hosted-zone-id "${HOSTED_ZONE_ID}" \
+    --record-name "${RECORD_NAME}" \
+    --output json \
+  | jq -e \
+    '(.healthChecks | length) == 2
+      and all(.healthChecks[]; ((.healthCheckId // "") | length) > 0)' \
+    >/dev/null
+}
+wait_for_command 40 15 arc_health_checks_are_ready
 
 aws arc-region-switch list-route53-health-checks \
   --region "${PLAN_CONTROL_REGION}" \
@@ -280,6 +382,22 @@ aws route53 change-resource-record-sets \
   --change-batch "file://${STATE_DIR}/route53-with-health-checks.json" \
   >/dev/null
 
+# Creating the plan starts an evaluation before the vended health checks can be
+# attached. Updating the now-complete plan starts a fresh immediate evaluation
+# instead of waiting for the next 30-minute steady-state cycle.
+jq \
+  --arg arn "${plan_arn}" \
+  '. + {arn:$arn}
+    | del(.name, .regions, .recoveryApproach, .primaryRegion, .tags)' \
+  "${STATE_DIR}/create-plan.json" \
+  > "${STATE_DIR}/update-plan.json"
+aws arc-region-switch update-plan \
+  --region "${PLAN_CONTROL_REGION}" \
+  --cli-input-json "file://${STATE_DIR}/update-plan.json" \
+  >/dev/null
+plan_created_epoch="$(date +%s)"
+plan_created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 evaluation_passed=false
 for _ in $(seq 1 80); do
   aws arc-region-switch get-plan-evaluation-status \
@@ -300,19 +418,35 @@ if [[ "${evaluation_passed}" != true ]]; then
   jq . "${STATE_DIR}/plan-evaluation.json" >&2
   exit 1
 fi
+evaluation_passed_epoch="$(date +%s)"
+evaluation_passed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+plan_evaluation_minutes="$(awk \
+  -v start="${plan_created_epoch}" \
+  -v finish="${evaluation_passed_epoch}" \
+  'BEGIN {printf "%.2f", (finish-start)/60}')"
 
 jq -n \
   --arg planArn "${plan_arn}" \
+  --arg primeStartedAt "${prime_started_at}" \
+  --arg planCreatedAt "${plan_created_at}" \
+  --arg evaluationPassedAt "${evaluation_passed_at}" \
   --argjson observedPeak "${OBSERVED_PEAK_REPLICAS}" \
   --argjson hpaMax "${HPA_MAX_REPLICAS}" \
   --argjson targetPercent "${TARGET_PERCENT}" \
+  --argjson planEvaluationMinutes "${plan_evaluation_minutes}" \
+  --slurpfile availability "${STATE_DIR}/west-availability.json" \
   --slurpfile evaluation "${STATE_DIR}/plan-evaluation.json" \
   '{
     planArn:$planArn,
+    primeStartedAt:$primeStartedAt,
+    planCreatedAt:$planCreatedAt,
+    evaluationPassedAt:$evaluationPassedAt,
+    planEvaluationMinutes:$planEvaluationMinutes,
     sourceReadyReplicas:$observedPeak,
     hpaMaximum:$hpaMax,
     targetPercent:$targetPercent,
     capacityMonitoringApproach:"sampledMaxInLast24Hours",
     precondition:"ARC evaluation passed with replica history collected",
+    loadTest:$availability[0],
     evaluation:$evaluation[0]
   }' | tee "${STATE_DIR}/history-gate.json"

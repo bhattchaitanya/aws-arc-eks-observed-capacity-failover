@@ -18,10 +18,26 @@ Before deployment, the live quota/cost gate passed for the complete target
 state. Re-run `scripts/preflight.sh` before any retry or expansion. Do not touch
 the unrelated pre-existing ARC plan `arc-demo-region-switch`.
 
-The modeled cost is approximately `$1.35/hour` ready and `$2.10/hour` during
+The modeled cost is approximately `$1.45/hour` ready and `$2.20/hour` during
 the temporary failover peak, below the user's `$5–$10/hour` ceiling. ARC's
 monthly plan price is prorated for a partial month; the hourly number is an
 estimate, not a promise of exact per-second billing.
 
 No automatic failback is allowed. Do not tear down the lab while the Medium
 draft is being reviewed unless the user explicitly requests teardown.
+
+The Oregon-to-Ohio execution completed successfully and both Regions currently
+hold 20 ready pods. Treat the lab as being in its temporary peak-cost state
+(about `$2.20/hour`) until the user explicitly approves scaling down, failback,
+or teardown.
+
+Do not delete or modify the ARC plan
+`arc-eks-24h-observed-capacity` or either regional Lambda function named
+`arc-eks-24h-availability-gate`. The user explicitly wants to inspect these
+resources before any destruction.
+
+The temporary local SDK access key was deleted after evidence collection; see
+`.state/sdk-key-destroyed.json`. The credentialless IAM user and its
+namespace-scoped EKS view access remain only as reviewable bootstrap metadata.
+Never create another access key without an explicit in-scope operational need,
+and always delete it before ending the experiment turn.

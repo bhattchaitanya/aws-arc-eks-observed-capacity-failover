@@ -20,30 +20,55 @@ manifest-validation:
     - . ./config.env
     - set +a
     - |
-      DEPLOY_REGION="$PRIMARY_REGION" envsubst < k8s/application.yaml.tpl
+      DEPLOY_REGION="$PRIMARY_REGION" envsubst < k8s/application.yaml.tpl \
         | kubectl apply --dry-run=client --validate=false -f -
 
 deploy:
   stage: deploy
   when: manual
+  resource_group: arc-eks-24h-lab
   script:
     - ./scripts/deploy.sh
+  artifacts:
+    paths:
+      - .state/
+    expire_in: 1 day
 
 prime-and-create-plan:
   stage: experiment
   when: manual
+  resource_group: arc-eks-24h-lab
+  needs:
+    - job: deploy
+      artifacts: true
   script:
     - ./scripts/prime-and-create-plan.sh
+  artifacts:
+    paths:
+      - .state/
+    expire_in: 1 day
 
 failover:
   stage: experiment
   when: manual
+  resource_group: arc-eks-24h-lab
+  needs:
+    - job: prime-and-create-plan
+      artifacts: true
   script:
     - ./scripts/failover.sh
+  artifacts:
+    paths:
+      - .state/
+    expire_in: 1 day
 
 teardown:
   stage: teardown
   when: manual
   allow_failure: false
+  resource_group: arc-eks-24h-lab
+  needs:
+    - job: deploy
+      artifacts: true
   script:
     - ./scripts/teardown.sh

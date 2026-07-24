@@ -6,6 +6,14 @@ metadata:
     app.kubernetes.io/part-of: ${EXPERIMENT_TAG}
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${APP_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/part-of: ${EXPERIMENT_TAG}
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ${APP_NAME}-code
@@ -97,6 +105,7 @@ spec:
       labels:
         app: ${APP_NAME}
     spec:
+      serviceAccountName: ${APP_NAME}
       nodeSelector:
         node.kubernetes.io/instance-type: m7i.xlarge
       terminationGracePeriodSeconds: 10

@@ -1,8 +1,8 @@
 flowchart TD
   Q["Quota + cost gate passes<br/>complete target state"]
-  A["Hold Oregon at 20 ready replicas<br/>and run 1,000 TPS"]
+  A["Hold Oregon at 20 ready replicas<br/>and target 1,000 TPS"]
   B["Create one ARC plan<br/>sampledMaxInLast24Hours · 100%"]
-  C{"30-minute plan evaluation<br/>history usable, no active warning?"}
+  C{"Immediate plan evaluation, then every 30 min<br/>history usable, no active warning?"}
   D["Stop: failover script refuses to run"]
   E["Start activation of us-east-2"]
   F{"Execution mode?"}

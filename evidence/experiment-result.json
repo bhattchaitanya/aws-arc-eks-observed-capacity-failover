@@ -1,0 +1,92 @@
+{
+  "capturedAt": "2026-07-24T21:08:03Z",
+  "awsAccount": "345882051641",
+  "plan": {
+    "arn": "arn:aws:arc-region-switch::345882051641:plan/arc-eks-24h-observed-capacity:io1bbq",
+    "version": "2",
+    "evaluationState": "passed",
+    "warningCount": 0,
+    "capacityMonitoringApproach": "sampledMaxInLast24Hours",
+    "targetPercent": 100,
+    "planEvaluationMinutes": 3.67
+  },
+  "loadTest": {
+    "configuredRequestsPerSecond": 1000,
+    "achievedRequestsPerSecond": 811.3978,
+    "durationSeconds": 180.9137,
+    "successfulTransactions": 146791,
+    "transportErrors": 2,
+    "totalAttempts": 146793,
+    "availabilityPercent": 99.9986
+  },
+  "execution": {
+    "id": "us-east-2/8b38dc8d2e9f758e",
+    "mode": "ungraceful",
+    "state": "completed",
+    "elapsedMinutes": 2.76,
+    "steps": [
+      {
+        "name": "Availability signal gate",
+        "type": "CustomActionLambda",
+        "status": "completed",
+        "ungracefulBehavior": "skip",
+        "durationSeconds": 5.05
+      },
+      {
+        "name": "Pre-scale EKS to observed 24-hour maximum",
+        "type": "EKSResourceScaling",
+        "status": "completed",
+        "durationSeconds": 29.35
+      },
+      {
+        "name": "Shift Route 53 traffic to activating Region",
+        "type": "Route53HealthCheck",
+        "status": "completed",
+        "durationSeconds": 120.88
+      }
+    ]
+  },
+  "capacity": {
+    "before": {
+      "us-west-2ReadyReplicas": 20,
+      "us-east-2ReadyReplicas": 1
+    },
+    "after": {
+      "us-west-2ReadyReplicas": 20,
+      "us-east-2ReadyReplicas": 20
+    },
+    "hpaMaximum": 40
+  },
+  "routing": {
+    "before": {
+      "us-west-2Health": "healthy",
+      "us-east-2Health": "unhealthy"
+    },
+    "after": {
+      "us-west-2Health": "unhealthy",
+      "us-east-2Health": "healthy"
+    },
+    "weightsUnchanged": {
+      "us-west-2": 100,
+      "us-east-2": 0
+    }
+  },
+  "destinationValidation": {
+    "region": "us-east-2",
+    "dynamoDbKey": "item-2",
+    "applicationReportedLatencyMs": 29.05
+  },
+  "security": {
+    "temporarySdkAccessKeysDeleted": true,
+    "localCredentialFilesRemoved": true
+  },
+  "retainedForReview": {
+    "arcPlan": "arc-eks-24h-observed-capacity",
+    "lambdaFunctions": [
+      "arn:aws:lambda:us-west-2:345882051641:function:arc-eks-24h-availability-gate",
+      "arn:aws:lambda:us-east-2:345882051641:function:arc-eks-24h-availability-gate"
+    ],
+    "automaticFailback": false,
+    "automaticTeardown": false
+  }
+}

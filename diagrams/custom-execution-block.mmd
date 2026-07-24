@@ -1,0 +1,36 @@
+flowchart TD
+  Plan["ARC activation workflow<br/>target: us-east-2"]
+  Mode{"Execution mode"}
+
+  subgraph Custom["Block 1 · CustomActionLambda"]
+    direction TB
+    Graceful["Graceful mode"]
+    Invoke["Invoke Lambda in activating Region<br/>timeout 2 min · retry 0.5 min"]
+    Alarm["Describe CloudWatch alarm<br/>AvailabilityPercent threshold 97%"]
+    AlarmState{"Alarm result"}
+    Stop["ALARM<br/>raise error and stop workflow"]
+    Continue["OK<br/>allow workflow"]
+    FailOpen["INSUFFICIENT_DATA or API error<br/>explicit fail-open policy"]
+    Ungraceful["Ungraceful mode<br/>ARC behavior: skip"]
+  end
+
+  Scale["Block 2 · EKSResourceScaling<br/>sampledMaxInLast24Hours · targetPercent 100<br/>East 1 → 20 ready pods"]
+  Route["Block 3 · Route53HealthCheck<br/>East healthy · West unhealthy"]
+  Validate["Validate East response<br/>and local DynamoDB replica"]
+
+  Role["ARC execution role<br/>InvokeFunction · DescribeCluster<br/>List access policies · Route 53 read"]
+  Access["EKS access entries in both Regions<br/>AmazonARCRegionSwitchScalingPolicy<br/>scope: arc-lab namespace"]
+
+  Plan --> Mode
+  Mode -- graceful --> Graceful --> Invoke --> Alarm --> AlarmState
+  AlarmState -- ALARM --> Stop
+  AlarmState -- OK --> Continue
+  AlarmState -- missing or error --> FailOpen
+  Mode -- ungraceful --> Ungraceful
+  Continue --> Scale
+  FailOpen --> Scale
+  Ungraceful --> Scale
+  Scale --> Route --> Validate
+  Role -. authorizes .-> Invoke
+  Role -. describes .-> Scale
+  Access -. patches Deployment and HPA .-> Scale

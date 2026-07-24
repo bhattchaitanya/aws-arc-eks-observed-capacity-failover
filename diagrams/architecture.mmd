@@ -1,5 +1,5 @@
 flowchart TB
-  Client["Clients / 1,000 TPS load"]
+  Client["Clients / 1,000 TPS target load"]
   DNS["Route 53 weighted CNAMEs<br/>Oregon 100 · Ohio 0<br/>ARC-vended health checks"]
   ARC["ARC Region Switch<br/>one active/passive plan"]
   CW["CloudWatch availability<br/>success ÷ total × 100"]

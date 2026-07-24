@@ -76,11 +76,17 @@ for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
       --function-name "${function_name}" \
       --zip-file "fileb://${STATE_DIR}/availability-gate.zip" \
       >/dev/null
+    aws lambda wait function-updated-v2 \
+      --region "${region_name}" \
+      --function-name "${function_name}"
     aws lambda update-function-configuration \
       --region "${region_name}" \
       --function-name "${function_name}" \
       --environment "Variables={ALARM_NAME=${alarm_name},FAIL_OPEN_ON_MISSING=true}" \
       >/dev/null
+    aws lambda wait function-updated-v2 \
+      --region "${region_name}" \
+      --function-name "${function_name}"
   else
     aws lambda create-function \
       --region "${region_name}" \
@@ -94,8 +100,8 @@ for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
       --environment "Variables={ALARM_NAME=${alarm_name},FAIL_OPEN_ON_MISSING=true}" \
       --tags Project="${EXPERIMENT_TAG}" \
       >/dev/null
+    aws lambda wait function-active-v2 --region "${region_name}" --function-name "${function_name}"
   fi
-  aws lambda wait function-active-v2 --region "${region_name}" --function-name "${function_name}"
 done
 
 execution_role_name="ArcEks24hRegionSwitchExecutionRole"
@@ -159,19 +165,32 @@ aws iam put-role-policy \
   --policy-name ArcEks24hExecution \
   --policy-document "file://${STATE_DIR}/arc-execution-policy.json"
 
-for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
-  cluster_id="$(cluster_name "${region_name}")"
-  if ! aws eks describe-access-entry \
+ensure_access_entry() {
+  local region_name="$1"
+  local cluster_id="$2"
+  local principal_arn="$3"
+  if aws eks describe-access-entry \
     --region "${region_name}" \
     --cluster-name "${cluster_id}" \
-    --principal-arn "${execution_role_arn}" >/dev/null 2>&1; then
-    aws eks create-access-entry \
-      --region "${region_name}" \
-      --cluster-name "${cluster_id}" \
-      --principal-arn "${execution_role_arn}" \
-      --type STANDARD \
-      >/dev/null
+    --principal-arn "${principal_arn}" \
+    >/dev/null 2>&1; then
+    return 0
   fi
+  aws eks create-access-entry \
+    --region "${region_name}" \
+    --cluster-name "${cluster_id}" \
+    --principal-arn "${principal_arn}" \
+    --type STANDARD \
+    >/dev/null
+}
+
+for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
+  cluster_id="$(cluster_name "${region_name}")"
+  wait_for_command 24 5 \
+    ensure_access_entry \
+    "${region_name}" \
+    "${cluster_id}" \
+    "${execution_role_arn}"
   aws eks associate-access-policy \
     --region "${region_name}" \
     --cluster-name "${cluster_id}" \

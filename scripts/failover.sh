@@ -6,6 +6,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 assert_account
 
+for command_name in aws curl jq kubectl; do
+  require_command "${command_name}"
+done
+
+aws eks update-kubeconfig \
+  --region "${PRIMARY_REGION}" \
+  --name "${PRIMARY_CLUSTER}" \
+  --alias arc-west
+aws eks update-kubeconfig \
+  --region "${STANDBY_REGION}" \
+  --name "${STANDBY_CLUSTER}" \
+  --alias arc-east
+
 [[ -f "${STATE_DIR}/history-gate.json" ]] || {
   echo "ARC history gate has not passed; refusing failover" >&2
   exit 1
@@ -17,6 +30,8 @@ if [[ "$(jq -r '.evaluation.evaluationState' "${STATE_DIR}/history-gate.json")" 
 fi
 
 plan_arn="$(cat "${STATE_DIR}/plan-arn.txt")"
+failover_started_epoch="$(date +%s)"
+failover_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 execution_id="$(aws arc-region-switch start-plan-execution \
   --region "${STANDBY_REGION}" \
   --plan-arn "${plan_arn}" \
@@ -77,15 +92,28 @@ aws arc-region-switch list-plan-execution-events \
   --execution-id "${execution_id}" \
   --output json > "${STATE_DIR}/plan-execution-events.json"
 
+failover_completed_epoch="$(date +%s)"
+failover_completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+failover_minutes="$(awk \
+  -v start="${failover_started_epoch}" \
+  -v finish="${failover_completed_epoch}" \
+  'BEGIN {printf "%.2f", (finish-start)/60}')"
+
 jq -n \
   --arg executionId "${execution_id}" \
   --arg planArn "${plan_arn}" \
+  --arg failoverStartedAt "${failover_started_at}" \
+  --arg failoverCompletedAt "${failover_completed_at}" \
+  --argjson failoverMinutes "${failover_minutes}" \
   --argjson eastReady "${east_ready}" \
   --arg responseRegion "${response_region}" \
   --slurpfile execution "${STATE_DIR}/plan-execution.json" \
   '{
     executionId:$executionId,
     planArn:$planArn,
+    failoverStartedAt:$failoverStartedAt,
+    failoverCompletedAt:$failoverCompletedAt,
+    failoverMinutes:$failoverMinutes,
     mode:"ungraceful",
     cloudWatchGateBehavior:"skipped by ARC",
     executionState:$execution[0].executionState,

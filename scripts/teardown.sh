@@ -45,6 +45,50 @@ for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
     >/dev/null 2>&1 || true
 done
 
+for context_name in arc-west arc-east; do
+  kubectl --context "${context_name}" \
+    delete namespace "${NAMESPACE}" \
+    --wait=true \
+    --timeout=15m \
+    >/dev/null 2>&1 || true
+done
+
+for region_name in "${PRIMARY_REGION}" "${STANDBY_REGION}"; do
+  cluster_id="$(cluster_name "${region_name}")"
+  if aws eks describe-cluster --region "${region_name}" --name "${cluster_id}" >/dev/null 2>&1; then
+    node_role_arn="$(aws eks describe-cluster \
+      --region "${region_name}" \
+      --name "${cluster_id}" \
+      --query 'cluster.computeConfig.nodeRoleArn' \
+      --output text)"
+    node_role_name="${node_role_arn##*/}"
+    aws iam delete-role-policy \
+      --role-name "${node_role_name}" \
+      --policy-name ArcEks24hDynamoDBAccess \
+      >/dev/null 2>&1 || true
+  fi
+done
+
+if [[ -f "${STATE_DIR}/nat-egress.json" ]]; then
+  while IFS= read -r nat_record; do
+    region_name="$(jq -r '.region' <<<"${nat_record}")"
+    nat_id="$(jq -r '.natGatewayId' <<<"${nat_record}")"
+    allocation_id="$(jq -r '.allocationId' <<<"${nat_record}")"
+    aws ec2 delete-nat-gateway \
+      --region "${region_name}" \
+      --nat-gateway-id "${nat_id}" \
+      >/dev/null 2>&1 || true
+    aws ec2 wait nat-gateway-deleted \
+      --region "${region_name}" \
+      --nat-gateway-ids "${nat_id}" \
+      >/dev/null 2>&1 || true
+    aws ec2 release-address \
+      --region "${region_name}" \
+      --allocation-id "${allocation_id}" \
+      >/dev/null 2>&1 || true
+  done < <(jq -c '.natGateways[]' "${STATE_DIR}/nat-egress.json")
+fi
+
 eksctl delete cluster -f "${LAB_ROOT}/infra/cluster-west.yaml" --wait || true
 eksctl delete cluster -f "${LAB_ROOT}/infra/cluster-east.yaml" --wait || true
 
@@ -62,3 +106,13 @@ for role_name in ArcEks24hAvailabilityGateRole ArcEks24hRegionSwitchExecutionRol
   done
   aws iam delete-role --role-name "${role_name}" >/dev/null 2>&1 || true
 done
+
+for policy_name in $(aws iam list-role-policies \
+  --role-name ArcEks24hAppPodRole \
+  --query 'PolicyNames[]' \
+  --output text 2>/dev/null); do
+  aws iam delete-role-policy \
+    --role-name ArcEks24hAppPodRole \
+    --policy-name "${policy_name}"
+done
+aws iam delete-role --role-name ArcEks24hAppPodRole >/dev/null 2>&1 || true
