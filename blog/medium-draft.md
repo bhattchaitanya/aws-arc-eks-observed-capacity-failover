@@ -303,6 +303,21 @@ For the live execution, I created a temporary IAM user with a temporary access k
 
 After evidence collection, the temporary access key was deleted and the local credential file was removed. The ARC plan and both custom Lambda functions were deliberately retained for review.
 
+## Read the exact source and evidence
+
+The sanitized implementation and evidence are public in [one immutable GitHub commit](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/commit/85260573e12269f16f7bf426c2dac764ecd88f8b). The repository contains no access keys, secret values, NLB hostnames, AWS account ID, hosted-zone ID, or raw console captures.
+
+The most useful files are:
+
+- [The complete three-block ARC activation workflow](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/arc/activation-workflow.example.json)
+- [The custom Lambda availability gate](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/lambda/availability_gate.py)
+- [The parameterized Gatling simulation](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/load-test/gatling/src/arc-failover.gatling.js)
+- [The AWS and Kubernetes SDK execution driver](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/scripts/arc_experiment_sdk.py)
+- [The guarded GitLab CI pipeline](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/.gitlab-ci.yml)
+- [The sanitized ARC experiment result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/experiment-result.json)
+- [The sanitized Gatling result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/gatling-summary.json)
+- [The publication-safe evidence images](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/screenshots)
+
 ## Measured results
 
 The source load generator was configured for 1,000 TPS and achieved **811.40 requests/second** over about three minutes. It recorded:
@@ -328,6 +343,8 @@ The failover run itself used `hey` inside Kubernetes. I did not relabel that out
 - 211 ms median, 4.027 s p95, and 7.461 s p99.
 
 This is a useful distinction. The profile reached and held a 1,000-arrivals/second injection plateau, but the full-run average was lower because the first 15 seconds intentionally ramped. The initial constant-rate attempt also exposed a local load-generator file-descriptor problem; adding a gradual ramp prevented that client-side artifact from being misreported as an EKS capacity result.
+
+The simulation uses Gatling’s open workload model and a shared server-to-server connection pool. [Gatling documents the JavaScript injection profile here](https://docs.gatling.io/concepts/injection/) and [the shared-connection option here](https://docs.gatling.io/reference/script/http/protocol/).
 
 ![Real Gatling Community Edition report](../evidence/screenshots/gatling-report-annotated.png)
 
