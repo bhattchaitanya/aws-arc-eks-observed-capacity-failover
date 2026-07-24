@@ -16,11 +16,25 @@ Amazon Application Recovery Controller (ARC) Region Switch has a useful middle g
 
 [AWS documents the EKS scaling block and its sampled-capacity behavior here](https://docs.aws.amazon.com/r53recovery/latest/dg/eks-resource-scaling-block.html).
 
+![Observed-capacity recovery target compared with the HPA ceiling](../diagrams/capacity-model.png)
+
+*Observed-capacity recovery: ARC turns a one-pod warm standby into the demonstrated 20-pod recovery target without blindly scaling to the 40-pod HPA ceiling.*
+
+[Image: A labeled capacity path compares one warm-standby pod, ARC’s observed 20-pod maximum, the resulting 20-pod recovery target, and the intentionally unused 40-pod HPA ceiling.]
+
 The resilience property I wanted to test was what this recovery path does *not* require. ARC does not need to discover the target from a live CloudWatch CPU graph during the incident. It already has the replica history. That matters when a regional impairment also makes normal observability incomplete or unavailable.
+
+The experiment question was:
+
+> Can ARC take a one-pod Ohio standby, recover it to the maximum replica count observed in Oregon during the previous 24 hours, prove all 20 destination pods are ready, and only then move traffic—without requiring a live CloudWatch utilization query in the ungraceful recovery path?
 
 ![Two-Region ARC and EKS architecture](../diagrams/architecture.png)
 
-## What I built
+*Two-Region recovery architecture: ARC pre-scales the Ohio EKS service from one to 20 ready pods before its Route 53 health-state block moves traffic; DynamoDB Global Tables keeps a local data replica in both Regions.*
+
+[Image: Labeled two-Region architecture showing clients, Route 53, Oregon and Ohio EKS clusters, local DynamoDB replicas, the ARC control plane, the optional CloudWatch availability gate, and capacity-first recovery.]
+
+## The recovery contract
 
 The lab uses:
 
@@ -71,6 +85,10 @@ The Ohio activation workflow contains three ordered execution blocks:
 That order is the design: policy first, capacity second, traffic third.
 
 ![ARC custom execution block and recovery composition](../diagrams/custom-execution-block.png)
+
+*The complete ARC execution contract: the custom availability policy has separate graceful and ungraceful paths, EKS observed-capacity scaling completes next, and Route 53 traffic control runs only after destination readiness.*
+
+[Image: Labeled ARC activation workflow showing the graceful CloudWatch availability gate, ungraceful skip behavior, fail-open branch, IAM dependencies, EKS pre-scaling, Route 53 health-state switch, and final data-plane validation.]
 
 ### Block 1: the custom Lambda execution block
 
@@ -139,7 +157,7 @@ This policy is not universally correct. Some organizations will prefer fail-clos
 
 The actual experiment used `mode: ungraceful`. ARC recorded the custom block as completed in about five seconds under its configured skip behavior, so the failover did not depend on Lambda or CloudWatch being usable.
 
-### The IAM composition behind the custom block
+#### The IAM composition behind the custom block
 
 Three separate permission layers are involved:
 
@@ -295,6 +313,10 @@ The ARC execution then produced:
 The ARC execution state was `completed`. A direct request to the Ohio NLB returned from an Ohio pod with a DynamoDB key and 29.05 ms application-reported latency.
 
 ![ARC Region Switch execution flow](../diagrams/execution-flow.png)
+
+*Measured recovery sequence: the quota and cost gate, 24-hour history evaluation, EKS pre-scale, Route 53 health-state switch, and data-plane proof all completed in the intended order.*
+
+[Image: Labeled four-phase ARC execution flow with the measured 3.67-minute history gate, 5.05-second custom-block skip, 29.35-second EKS scale-up, 120.88-second routing step, and 2.76-minute completed execution.]
 
 ## What this proves—and what it does not
 

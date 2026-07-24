@@ -1,38 +1,56 @@
-flowchart TB
-  Client["Clients / 1,000 TPS target load"]
-  DNS["Route 53 weighted CNAMEs<br/>Oregon 100 · Ohio 0<br/>ARC-vended health checks"]
-  ARC["ARC Region Switch<br/>one active/passive plan"]
-  CW["CloudWatch availability<br/>success ÷ total × 100"]
-  Gate["Optional Lambda gate<br/>fail-open on missing data<br/>skipped in ungraceful mode"]
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Inter, Arial, sans-serif","fontSize":"18px","primaryTextColor":"#0f172a","lineColor":"#475569","background":"#ffffff","edgeLabelBackground":"#ffffff","clusterBkg":"#f8fafc","clusterBorder":"#cbd5e1"},"flowchart":{"htmlLabels":true,"curve":"basis","nodeSpacing":42,"rankSpacing":64}}}%%
+flowchart LR
+  Client["Clients<br/><b>1,000 TPS target</b>"]:::client
+  DNS["Route 53 weighted records<br/><b>Oregon 100 · Ohio 0</b><br/>ARC-vended health checks"]:::control
 
-  subgraph Regions["Application data plane"]
-    direction LR
-    subgraph West["us-west-2 — active before failover"]
-      WNLB["Public NLB"]
-      WEKS["EKS Auto Mode<br/>HPA ceiling 40"]
-      WPods["20 ready API pods<br/>observed source maximum"]
-      WDDB["DynamoDB local replica"]
-      WNLB --> WPods
-      WEKS --> WPods
-      WPods --> WDDB
-    end
-
-    subgraph East["us-east-2 — standby before failover"]
-      ENLB["Public NLB"]
-      EEKS["EKS Auto Mode<br/>HPA ceiling 40"]
-      EPods["1 ready API pod<br/>then ARC pre-scales to 20"]
-      EDDB["DynamoDB local replica"]
-      ENLB --> EPods
-      EEKS --> EPods
-      EPods --> EDDB
-    end
+  subgraph West["PRIMARY · us-west-2 (Oregon)"]
+    direction TB
+    WNLB["Network Load Balancer"]:::network
+    WEKS["EKS Auto Mode<br/>HPA range 1–40"]:::compute
+    WPods["<b>20 ready pods</b><br/>observed source maximum"]:::computeStrong
+    WDDB["DynamoDB<br/>local replica"]:::data
+    WNLB --> WPods
+    WEKS --> WPods
+    WPods --> WDDB
   end
 
+  subgraph East["RECOVERY · us-east-2 (Ohio)"]
+    direction TB
+    ENLB["Network Load Balancer"]:::network
+    EEKS["EKS Auto Mode<br/>HPA range 1–40"]:::compute
+    EPods["<b>1 → 20 ready pods</b><br/>ARC pre-scales first"]:::computeStrong
+    EDDB["DynamoDB<br/>local replica"]:::data
+    ENLB --> EPods
+    EEKS --> EPods
+    EPods --> EDDB
+  end
+
+  subgraph Recovery["ARC CONTROL PLANE"]
+    direction TB
+    ARC["ARC Region Switch<br/><b>one active/passive plan</b>"]:::arc
+    Gate["Custom Lambda gate<br/>97% availability policy<br/><b>skipped for ungraceful recovery</b>"]:::gate
+    Scale["EKSResourceScaling<br/><b>sampledMaxInLast24Hours = 20</b><br/>targetPercent = 100"]:::arc
+    Route["Route53HealthCheck<br/><b>Ohio healthy · Oregon unhealthy</b>"]:::arc
+    ARC --> Scale --> Route
+    Gate -. graceful only .-> ARC
+  end
+
+  CW["CloudWatch<br/>AvailabilityPercent"]:::telemetry
+
   Client --> DNS
-  DNS --> WNLB
-  DNS -. "after health-state flip" .-> ENLB
-  CW -. "graceful only" .-> Gate
-  Gate -. "custom action" .-> ARC
-  ARC -->|"1 · sampledMaxInLast24Hours<br/>targetPercent 100 → 20"| EEKS
-  ARC -->|"2 · switch health-check states"| DNS
-  WDDB <-->|"Global Tables replication"| EDDB
+  DNS -->|"before"| WNLB
+  DNS -. "after ARC health-state switch" .-> ENLB
+  CW -. optional signal .-> Gate
+  Scale -->|"pre-scale before traffic"| EEKS
+  Route -->|"change health states"| DNS
+  WDDB <-->|"DynamoDB Global Tables replication"| EDDB
+
+  classDef client fill:#f1f5f9,stroke:#475569,stroke-width:2px,color:#0f172a;
+  classDef network fill:#eff6ff,stroke:#2563eb,stroke-width:2px,color:#0f172a;
+  classDef compute fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,color:#0f172a;
+  classDef computeStrong fill:#e0e7ff,stroke:#4338ca,stroke-width:3px,color:#0f172a;
+  classDef data fill:#ecfdf5,stroke:#059669,stroke-width:2px,color:#0f172a;
+  classDef control fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a;
+  classDef arc fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a;
+  classDef gate fill:#fefce8,stroke:#ca8a04,stroke-width:2px,color:#0f172a;
+  classDef telemetry fill:#f8fafc,stroke:#64748b,stroke-width:2px,color:#0f172a;

@@ -1,0 +1,18 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Inter, Arial, sans-serif","fontSize":"19px","primaryTextColor":"#0f172a","lineColor":"#475569","background":"#ffffff","edgeLabelBackground":"#ffffff","clusterBkg":"#f8fafc","clusterBorder":"#cbd5e1"},"flowchart":{"htmlLabels":true,"curve":"basis","nodeSpacing":58,"rankSpacing":76}}}%%
+flowchart TB
+  subgraph ObservedPath["ARC CAPACITY PATH"]
+    direction LR
+    Min["WARM STANDBY<br/><span style='font-size:32px'><b>1 pod</b></span><br/>cheap, but not recovery-ready"]:::baseline
+    Observed["ARC 24-HOUR SAMPLE<br/><span style='font-size:32px'><b>20 pods</b></span><br/>highest demonstrated demand"]:::observed
+    Target["RECOVERY TARGET<br/><span style='font-size:32px'><b>20 pods</b></span><br/>100% × observed maximum"]:::target
+    Min -->|"normal standby"| Observed
+    Observed -->|"sampledMaxInLast24Hours"| Target
+  end
+
+  Ceiling["HPA CEILING · <b>40 pods</b><br/>Safety limit, not evidence of demand.<br/><b>Do not blindly pre-scale every service to this value.</b>"]:::ceiling
+  Target -. "intentionally below ceiling" .-> Ceiling
+
+  classDef baseline fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#0f172a;
+  classDef observed fill:#e0e7ff,stroke:#4f46e5,stroke-width:3px,color:#0f172a;
+  classDef target fill:#dcfce7,stroke:#16a34a,stroke-width:4px,color:#14532d;
+  classDef ceiling fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a;
