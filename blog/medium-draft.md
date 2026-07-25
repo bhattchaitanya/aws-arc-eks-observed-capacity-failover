@@ -225,8 +225,6 @@ A separate Gatling verification reached and held a 1,000-arrivals/second plateau
 
 *The Gatling report shows the 1,000-arrivals/second plateau and measured success result.*
 
-The implementation, SDK driver, sanitized plan, and publication-safe evidence are available in [the immutable experiment commit](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/commit/8c82903c3cb755d54d7af4a8fcb031571ac4ddae).
-
 ## What this proves—and what it does not
 
 This experiment demonstrates that ARC can:
@@ -245,3 +243,13 @@ ARC separates capacity memory from capacity readiness.
 The remembered 24-hour maximum supplies the number. Kubernetes readiness supplies the go-signal. Sequential workflow execution ensures traffic comes last.
 
 That is the valuable business property: a smaller steady-state recovery footprint without making the first minutes of failover depend on a live utilization dashboard or an uncontrolled autoscaling race.
+
+## Reproduce the lab
+
+The complete implementation and publication-safe evidence are available here:
+
+- [Full reproducible lab at the immutable experiment commit](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/8c82903c3cb755d54d7af4a8fcb031571ac4ddae)
+- [Exact sanitized ARC workflows](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/arc/as-deployed-workflows.sanitized.json)
+- [AWS and Kubernetes SDK experiment driver](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/scripts/arc_experiment_sdk.py)
+- [Gatling workload](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/load-test/gatling/src/arc-failover.gatling.js)
+- [Sanitized screenshots and execution evidence](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/evidence)
