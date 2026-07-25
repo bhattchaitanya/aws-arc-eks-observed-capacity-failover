@@ -6,7 +6,7 @@ Regional recovery has an awkward capacity problem.
 
 Keeping a second Region at full production scale is expensive. Keeping it at one pod is cheap, but sending all production traffic to that pod can create a second outage while nodes and pods catch up. Scaling every service to its HPA maximum is not a good compromise either: an HPA maximum is a safety ceiling, not evidence that the service ever needed that much capacity.
 
-Amazon Application Recovery Controller (ARC) Region Switch has a useful middle ground for EKS. Its EKS resource-scaling execution block can use `sampledMaxInLast24Hours` and recover to a percentage of the maximum replica count ARC observed during the previous 24 hours. In this experiment:
+Amazon Application Recovery Controller (ARC) Region Switch has a useful middle ground for EKS. Its EKS resource-scaling execution block can use `sampledMaxInLast24Hours` and recover to a percentage of the maximum replica count ARC collected and stored for the configured Kubernetes resource during the previous 24 hours. This is ARC-managed replica-count history—not a query against a live CloudWatch CPU graph, Prometheus, or the HPA ceiling. In this experiment:
 
 - The HPA range is 1–40.
 - Oregon (`us-west-2`) is deliberately held at a demonstrated peak of 20 ready pods.
@@ -22,7 +22,7 @@ Amazon Application Recovery Controller (ARC) Region Switch has a useful middle g
 
 [Image: A clean two-Region architecture diagram showing the ARC policy, capacity, and traffic sequence; Oregon and Ohio EKS services; local DynamoDB replicas; the one-to-20-pod recovery; and the intentionally unused 40-pod HPA ceiling.]
 
-The resilience property I wanted to test was what this recovery path does *not* require. ARC does not need to discover the target from a live CloudWatch CPU graph during the incident. It already has the replica history. That matters when a regional impairment also makes normal observability incomplete or unavailable.
+The resilience property I wanted to test was what this recovery path does *not* require. ARC does not need to discover the target from a live CloudWatch CPU graph during the incident. Plan evaluation has already confirmed that ARC collected and stored the required replica-count history. That matters when a regional impairment also makes normal observability incomplete or unavailable.
 
 The experiment question was:
 
@@ -42,9 +42,9 @@ The lab uses:
 - Route 53 weighted CNAMEs: Oregon weight 100 and Ohio weight 0, with ARC-vended health checks attached.
 - One ARC active/passive Region Switch plan.
 - A custom `AvailabilityPercent` CloudWatch metric and a 97% alarm.
-- One custom Lambda execution block in each Region.
+- One regional Lambda function per Region, referenced by the custom block in each activation workflow.
 
-The application and data tier are deployed in both Regions, but ingress begins active/passive. ARC requires an activation workflow for each Region in an active/passive plan, so the plan contains both Oregon-to-Ohio and Ohio-to-Oregon activation workflows. This experiment executes only Oregon-to-Ohio. There is no automatic failback.
+The application and data tier are deployed in both Regions, but ingress begins active/passive. ARC supports either one reusable activation workflow or two separate activation workflows for an active/passive plan. This plan deliberately contains two: Oregon-to-Ohio and Ohio-to-Oregon. The experiment executes only Oregon-to-Ohio. There is no automatic failback.
 
 The `.example` hosted zone in this account is authoritative inside Route 53 but intentionally is not a publicly delegated production domain. I validated the application directly through the destination NLB. A production implementation must use a real delegated domain.
 
@@ -90,21 +90,22 @@ The custom block is defined twice in the plan—once for each activation workflo
 
 ```json
 {
-  "executionBlockType": "CustomActionLambda",
   "name": "Availability signal gate",
+  "description": "Graceful mode checks CloudWatch; missing data fails open. Ungraceful mode skips this dependency.",
+  "executionBlockType": "CustomActionLambda",
   "executionBlockConfiguration": {
     "customActionLambdaConfig": {
-      "timeoutMinutes": 2,
-      "retryIntervalMinutes": 0.5,
-      "regionToRun": "activatingRegion",
       "lambdas": [
         {
-          "arn": "arn:aws:lambda:us-west-2:ACCOUNT:function:arc-eks-24h-availability-gate"
+          "arn": "arn:aws:lambda:us-west-2:ACCOUNT_ID:function:arc-eks-24h-availability-gate"
         },
         {
-          "arn": "arn:aws:lambda:us-east-2:ACCOUNT:function:arc-eks-24h-availability-gate"
+          "arn": "arn:aws:lambda:us-east-2:ACCOUNT_ID:function:arc-eks-24h-availability-gate"
         }
       ],
+      "retryIntervalMinutes": 0.5,
+      "regionToRun": "activatingRegion",
+      "timeoutMinutes": 2,
       "ungraceful": {
         "behavior": "skip"
       }
@@ -122,14 +123,24 @@ Second, graceful and ungraceful executions intentionally have different semantic
 Third, the Lambda uses a business availability signal rather than CPU alone:
 
 ```python
+fail_open = os.environ.get("FAIL_OPEN_ON_MISSING", "true").lower() == "true"
+cloudwatch = boto3.client("cloudwatch")
 response = cloudwatch.describe_alarms(AlarmNames=[alarm_name])
-state = response["MetricAlarms"][0]["StateValue"]
+alarms = response.get("MetricAlarms", [])
+state = alarms[0]["StateValue"] if alarms else "INSUFFICIENT_DATA"
 
 if state == "ALARM":
-    raise RuntimeError("Availability is below 97%")
+    raise RuntimeError(f"Availability alarm {alarm_name} is ALARM")
 
-if state == "INSUFFICIENT_DATA":
-    return {"allowed": True, "failOpenApplied": True}
+if state == "INSUFFICIENT_DATA" and not fail_open:
+    raise RuntimeError(f"Availability alarm {alarm_name} has insufficient data")
+
+return {
+    "allowed": True,
+    "alarm": alarm_name,
+    "state": state,
+    "failOpenApplied": state == "INSUFFICIENT_DATA",
+}
 ```
 
 An `ALARM` state raises an error and blocks a graceful workflow. `OK` allows it to continue. `INSUFFICIENT_DATA` follows the lab’s explicit fail-open policy.
@@ -140,11 +151,13 @@ Fourth, a CloudWatch API exception follows the same fail-open policy:
 try:
     response = cloudwatch.describe_alarms(AlarmNames=[alarm_name])
 except Exception as exc:
-    return {
-        "allowed": True,
-        "reason": "CloudWatch API unavailable; fail-open policy applied",
-        "errorType": type(exc).__name__,
-    }
+    if fail_open:
+        return {
+            "allowed": True,
+            "reason": "CloudWatch API unavailable; fail-open policy applied",
+            "errorType": type(exc).__name__,
+        }
+    raise
 ```
 
 This policy is not universally correct. Some organizations will prefer fail-closed behavior for planned switchovers. For a fail-at-all-costs regional recovery, however, allowing an optional observability dependency to veto recovery can be worse than continuing.
@@ -177,32 +190,128 @@ Plan evaluation verifies these elements before recovery. AWS says it checks that
 
 ### Block 2: pre-scale EKS from observed history
 
-The second block is the core of the experiment:
+The second block is the core of the experiment. The earlier abbreviated version of this JSON left out the two fields that identify the actual clusters and Kubernetes resources. Below is the **complete EKS block from the retained plan’s code view**, with only the AWS account ID replaced by `ACCOUNT_ID`:
 
 ```json
 {
+  "name": "Pre-scale EKS to observed 24-hour maximum",
+  "description": "Match 100 percent of ARC sampled max; do not use HPA max as the recovery target.",
   "executionBlockType": "EKSResourceScaling",
   "executionBlockConfiguration": {
     "eksResourceScalingConfig": {
-      "timeoutMinutes": 25,
-      "capacityMonitoringApproach": "sampledMaxInLast24Hours",
-      "targetPercent": 100,
-      "ungraceful": {
-        "minimumSuccessPercentage": 99
-      },
       "kubernetesResourceType": {
         "apiVersion": "apps/v1",
         "kind": "Deployment"
+      },
+      "timeoutMinutes": 25,
+      "scalingResources": [
+        {
+          "arc-transaction-api": {
+            "us-east-2": {
+              "namespace": "arc-lab",
+              "name": "arc-transaction-api",
+              "hpaName": "arc-transaction-api"
+            },
+            "us-west-2": {
+              "namespace": "arc-lab",
+              "name": "arc-transaction-api",
+              "hpaName": "arc-transaction-api"
+            }
+          }
+        }
+      ],
+      "eksClusters": [
+        {
+          "clusterArn": "arn:aws:eks:us-west-2:ACCOUNT_ID:cluster/arc-eks-24h-west"
+        },
+        {
+          "clusterArn": "arn:aws:eks:us-east-2:ACCOUNT_ID:cluster/arc-eks-24h-east"
+        }
+      ],
+      "ungraceful": {
+        "minimumSuccessPercentage": 99
+      },
+      "targetPercent": 100,
+      "capacityMonitoringApproach": "sampledMaxInLast24Hours"
+    }
+  }
+}
+```
+
+The repository also contains [the complete two-workflow plan exactly as shown by the live ARC code view](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/main/arc/as-deployed-workflows.sanitized.json). Both activation workflows are present; only the account ID, hosted-zone ID, and recovery record name are replaced with explicit placeholders.
+
+#### What every EKS field does
+
+`eksClusters` gives ARC both cluster ARNs. `scalingResources` is the correspondence map: the logical application name maps to a namespace, Deployment name, and optional HPA name in each Region. `kubernetesResourceType` tells ARC that the scale and status subresources belong to an `apps/v1` Deployment.
+
+That map is why the short form was insufficient. ARC cannot infer that `arc-transaction-api` in Ohio is the counterpart of `arc-transaction-api` in Oregon from `targetPercent` alone.
+
+ARC reaches those resources through two permission layers. The plan execution role can describe the EKS clusters and list associated access policies. Inside each cluster, an EKS access entry associates that role with the AWS-managed `AmazonARCRegionSwitchScalingPolicy`, namespace-scoped to `arc-lab`. The policy grants `get` and `update` on Kubernetes scale subresources, `get` on status subresources, and `get` and `patch` on HPAs. Those are the operations ARC needs to discover readiness, change the desired replica count, and hold the HPA scale-down path.
+
+[AWS publishes the exact EKS access-entry permissions used by Region Switch](https://docs.aws.amazon.com/r53recovery/latest/dg/eks-resource-scaling-block.html).
+
+The `hpaName` value is also operationally important. AWS documents that, when it is present, Region Switch patches the HPA with:
+
+```json
+{
+  "spec": {
+    "behavior": {
+      "scaleDown": {
+        "selectPolicy": "Disabled"
       }
     }
   }
 }
 ```
 
-Two percentages serve different purposes:
+This prevents the HPA from undoing the recovery scale while the plan is running—and the AWS documentation says the protection can remain after execution. GitOps or another drift-correcting system must therefore ignore the ARC-managed replica and HPA fields during recovery, and operators must deliberately restore their normal HPA policy afterward.
+
+#### How ARC obtains the 24-hour capacity
+
+For EKS, AWS describes `sampledMaxInLast24Hours` as **Max running capacity sampled over 24 hours**. The service uses the `ReplicaCount` value for the configured EKS resource, collects and stores that monitoring data, and retains the maximum needed by the plan. It is not the pod CPU value, pod memory value, a Prometheus query, or `maxReplicas` from the HPA.
+
+Plan evaluation checks that this Kubernetes replica-count data has actually been collected and stored. It also captures the running-pod requirement needed to execute the plan. Evaluation runs when the plan is created or updated and then every 30 minutes in steady state. AWS publishes the 24-hour window and the evaluation cadence, but it does **not** publish the internal replica-sampling interval; the article therefore does not invent one.
+
+[AWS documents the EKS block’s collection, calculation, HPA patch, readiness wait, and evaluation checks here](https://docs.aws.amazon.com/r53recovery/latest/dg/eks-resource-scaling-block.html).
+
+#### How the target is calculated
+
+The source for an active/passive activation is the Region being left; the destination is the Region being activated. ARC calculates:
+
+```text
+desired destination replicas =
+ceil((targetPercent / 100) × sampled source replica maximum)
+
+ceil((100 / 100) × 20) = 20
+```
+
+The HPA maximum of 40 is not part of that equation. It remains a safety ceiling for ordinary autoscaling. The two percentages in the plan also serve different purposes:
 
 - `targetPercent: 100` asks for the full observed maximum. The capacity target remains 20 pods.
-- `minimumSuccessPercentage: 99` is the maximum accepted by the ARC API for this ungraceful field. It does not change the requested target from 20.
+- `minimumSuccessPercentage: 99` is the ungraceful completion threshold, and 99 is the API maximum. It does not reduce the requested target from 20 or turn the HPA maximum into the target.
+
+[The ARC API reference lists the exact `eksClusters`, `scalingResources`, `targetPercent`, and ungraceful fields](https://docs.aws.amazon.com/arc-region-switch/latest/api/API_EksResourceScalingConfiguration.html).
+
+#### How ARC avoids scaling work that is already done
+
+At execution time, ARC compares the destination’s **ready replica count** with the calculated desired value.
+
+- If destination ready replicas are already at or above the desired count, AWS’s documented conditional requires no scale-up; the capacity is already there.
+- If the ready count is lower, ARC updates the destination resource’s replica value to the desired count.
+- ARC then waits for the destination replicas to become ready. If new nodes are required, it relies on the configured node autoscaler. In this lab, EKS Auto Mode supplied the additional node capacity.
+- Only after the EKS execution block satisfies its configured completion condition can the next sequential block—the Route 53 health-state change—begin.
+
+This is a readiness gate, not a prediction based on CPU. Pod readiness probes and the Deployment status determine whether the requested replica capacity is usable. The run’s ARC event stream recorded the sampled source value of 20, the destination scale request, completion of the EKS block, and only then completion of the Route 53 block.
+
+ARC orchestrates this scale-up; it does not reserve EC2 capacity. If the destination Region cannot supply nodes before the block’s timeout or configured ungraceful threshold, the plan cannot manufacture that capacity. [AWS recommends reserving capacity for applications that require a hard guarantee](https://docs.aws.amazon.com/r53recovery/latest/dg/best-practices.region-switch.html). This lab proved that On-Demand capacity was available during this run, not that it will always be available.
+
+There is also a useful separation of planes. Creating or updating the plan and running plan evaluation are management activities. Recovery execution uses Region Switch’s independent regional data planes, which AWS describes as the highly available path for starting and reading executions during an impairment. The recovery path still needs the EKS and compute capacity it is trying to create, but it does not need a fresh CloudWatch utilization query to decide that the target is 20. [AWS documents the Region Switch control-plane and regional data-plane boundary here](https://docs.aws.amazon.com/r53recovery/latest/dg/data-and-control-planes-rs.html).
+
+![ARC EKS sampling and destination-readiness flow](../diagrams/eks-sampling-readiness.png)
+
+*ARC uses stored replica-count evidence to calculate 20, checks the destination first, scales only when needed, waits for readiness, and then releases the traffic step. The documented 24-hour window should not be confused with an undocumented sampling cadence.*
+
+[Image: A three-stage diagram showing ARC’s 24-hour ReplicaCount history and evaluation gate, the 100-percent recovery calculation, and the destination ready-replica check and scale loop before Route 53.]
 
 During execution, ARC retrieved its sampled replica maximum, set the Ohio Deployment’s desired replicas to 20, protected the HPA from scaling down, and waited for the destination replicas to become ready. EKS Auto Mode added node capacity as required.
 
@@ -226,11 +335,14 @@ The final block uses the Route 53 health checks that ARC allocates for the recor
 
 ```json
 {
+  "name": "Shift Route 53 traffic to activating Region",
+  "description": "ARC changes highly available health-check state; weighted records remain 100 West and 0 East.",
   "executionBlockType": "Route53HealthCheck",
   "executionBlockConfiguration": {
     "route53HealthCheckConfig": {
       "hostedZoneId": "HOSTED_ZONE_ID",
-      "recordName": "arc-eks-24h.example.com",
+      "recordName": "RECOVERY_RECORD_NAME",
+      "timeoutMinutes": 5,
       "recordSets": [
         {
           "recordSetIdentifier": "us-west-2-primary",
@@ -267,34 +379,23 @@ The pipeline therefore does this in order:
 7. Require `evaluationState: passed` and zero warnings.
 8. Write durable evidence and refuse failover when the gate is absent.
 
-ARC evaluates immediately after plan creation or update and every 30 minutes in steady state. [AWS documents the plan-evaluation schedule here](https://docs.aws.amazon.com/r53recovery/latest/dg/working-with-rs-execution-blocks.html).
+ARC evaluates immediately after plan creation or update and every 30 minutes in steady state. [AWS documents the plan-evaluation schedule here](https://docs.aws.amazon.com/r53recovery/latest/dg/region-switch-plans.html).
 
 The first evaluation briefly reported that replica history was not yet available and that the vended health checks had not been attached. Those warnings were resolved. The guarded evaluation passed in **3.67 minutes**, with Oregon still at 20 ready replicas.
 
 This ordering avoids creating a “24-hour maximum” plan whose only meaningful sample is the standby-like one-pod state.
 
-## The GitLab, SDK, and evidence workflow
+## The SDK and evidence workflow
 
-The repository includes a GitLab CI pipeline and two operator surfaces:
+The repository has two operator surfaces:
 
-- Shell scripts for reproducible infrastructure creation and GitLab runners.
-- A local Python driver using `boto3` and the Kubernetes SDK for execution and evidence collection.
-
-The GitLab jobs are:
-
-- `shellcheck`
-- `manifest-validation`
-- `deploy` — manual
-- `prime-and-create-plan` — manual
-- `failover` — manual
-- `teardown` — manual
-
-The mutating jobs share a GitLab `resource_group`, so two operators cannot modify the experiment concurrently. Non-secret `.state` evidence is passed between isolated jobs as one-day artifacts. The protected runner requires short-lived AWS credentials and the normal AWS/Kubernetes tooling.
+- Guarded shell scripts for reproducible creation, history priming, failover, and explicit teardown.
+- A local Python driver using `boto3` and the Kubernetes SDK for plan-contract validation, execution, and evidence collection.
 
 For the live execution, I created a temporary IAM user with a temporary access key, placed the credential only in a mode-600 ignored file, and used SDK calls to:
 
 - Verify the AWS account.
-- Read and validate the ARC plan’s exact execution-block contract.
+- Read and validate the ARC plan’s exact execution-block contract, including both EKS cluster ARNs, both regional resource mappings, both HPA names, and the sampling configuration.
 - Read EKS Deployments and HPAs through namespace-scoped EKS access entries.
 - Start and poll the ARC execution.
 - Capture every execution event and step time.
@@ -309,11 +410,10 @@ The sanitized implementation and evidence are public in [one immutable GitHub co
 
 The most useful files are:
 
-- [The complete three-block ARC activation workflow](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/arc/activation-workflow.example.json)
+- [The complete as-deployed two-workflow ARC plan, sanitized](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/main/arc/as-deployed-workflows.sanitized.json)
 - [The custom Lambda availability gate](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/lambda/availability_gate.py)
 - [The parameterized Gatling simulation](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/load-test/gatling/src/arc-failover.gatling.js)
 - [The AWS and Kubernetes SDK execution driver](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/scripts/arc_experiment_sdk.py)
-- [The guarded GitLab CI pipeline](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/.gitlab-ci.yml)
 - [The sanitized ARC experiment result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/experiment-result.json)
 - [The sanitized Gatling result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/gatling-summary.json)
 - [The publication-safe evidence images](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/screenshots)

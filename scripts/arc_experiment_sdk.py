@@ -230,6 +230,51 @@ def plan_contract(plan: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("ARC targetPercent is not 100.")
     if scaling.get("ungraceful", {}).get("minimumSuccessPercentage") != 99:
         raise RuntimeError("ARC ungraceful minimum success is not the API maximum, 99.")
+    expected_resource_type = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+    }
+    if scaling.get("kubernetesResourceType") != expected_resource_type:
+        raise RuntimeError(
+            "ARC Kubernetes resource type does not match apps/v1 Deployment."
+        )
+
+    expected_scaling_resources = [
+        {
+            APPLICATION: {
+                STANDBY_REGION: {
+                    "namespace": NAMESPACE,
+                    "name": APPLICATION,
+                    "hpaName": APPLICATION,
+                },
+                PRIMARY_REGION: {
+                    "namespace": NAMESPACE,
+                    "name": APPLICATION,
+                    "hpaName": APPLICATION,
+                },
+            }
+        }
+    ]
+    if scaling.get("scalingResources") != expected_scaling_resources:
+        raise RuntimeError("ARC scalingResources do not match the deployed application.")
+
+    cluster_arns = [
+        item.get("clusterArn", "") for item in scaling.get("eksClusters", [])
+    ]
+    expected_cluster_suffixes = {
+        f":eks:{PRIMARY_REGION}:": f":cluster/{PRIMARY_CLUSTER}",
+        f":eks:{STANDBY_REGION}:": f":cluster/{STANDBY_CLUSTER}",
+    }
+    if len(cluster_arns) != len(expected_cluster_suffixes):
+        raise RuntimeError("ARC plan must contain exactly two EKS cluster ARNs.")
+    for region_marker, cluster_suffix in expected_cluster_suffixes.items():
+        if not any(
+            region_marker in arn and arn.endswith(cluster_suffix)
+            for arn in cluster_arns
+        ):
+            raise RuntimeError(
+                f"ARC plan is missing the expected EKS cluster {cluster_suffix}."
+            )
 
     return {
         "workflowTargetRegion": STANDBY_REGION,
@@ -242,6 +287,9 @@ def plan_contract(plan: dict[str, Any]) -> dict[str, Any]:
             "lambdaArns": [item["arn"] for item in custom["lambdas"]],
         },
         "eksScaling": {
+            "kubernetesResourceType": scaling["kubernetesResourceType"],
+            "scalingResources": scaling["scalingResources"],
+            "eksClusters": scaling["eksClusters"],
             "capacityMonitoringApproach": scaling["capacityMonitoringApproach"],
             "targetPercent": scaling["targetPercent"],
             "minimumSuccessPercentage": scaling["ungraceful"][
