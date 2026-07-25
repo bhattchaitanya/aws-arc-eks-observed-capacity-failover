@@ -238,7 +238,7 @@ The second block is the core of the experiment. The earlier abbreviated version 
 }
 ```
 
-The repository also contains [the complete two-workflow plan exactly as shown by the live ARC code view](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/main/arc/as-deployed-workflows.sanitized.json). Both activation workflows are present; only the account ID, hosted-zone ID, and recovery record name are replaced with explicit placeholders.
+The repository also contains [the complete two-workflow plan exactly as shown by the live ARC code view](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/arc/as-deployed-workflows.sanitized.json). Both activation workflows are present; only the account ID, hosted-zone ID, and recovery record name are replaced with explicit placeholders.
 
 #### What every EKS field does
 
@@ -406,17 +406,17 @@ After evidence collection, the temporary access key was deleted and the local cr
 
 ## Read the exact source and evidence
 
-The sanitized implementation and evidence are public in [one immutable GitHub commit](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/commit/85260573e12269f16f7bf426c2dac764ecd88f8b). The repository contains no access keys, secret values, NLB hostnames, AWS account ID, hosted-zone ID, or raw console captures.
+The reconciled implementation and evidence are in [one immutable GitHub commit](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/commit/8c82903c3cb755d54d7af4a8fcb031571ac4ddae). The repository contains no access keys, secret values, NLB hostnames, AWS account ID, hosted-zone ID, or raw console captures.
 
 The most useful files are:
 
-- [The complete as-deployed two-workflow ARC plan, sanitized](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/main/arc/as-deployed-workflows.sanitized.json)
-- [The custom Lambda availability gate](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/lambda/availability_gate.py)
-- [The parameterized Gatling simulation](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/load-test/gatling/src/arc-failover.gatling.js)
-- [The AWS and Kubernetes SDK execution driver](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/scripts/arc_experiment_sdk.py)
-- [The sanitized ARC experiment result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/experiment-result.json)
-- [The sanitized Gatling result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/gatling-summary.json)
-- [The publication-safe evidence images](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/85260573e12269f16f7bf426c2dac764ecd88f8b/evidence/screenshots)
+- [The complete as-deployed two-workflow ARC plan, sanitized](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/arc/as-deployed-workflows.sanitized.json)
+- [The custom Lambda availability gate](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/lambda/availability_gate.py)
+- [The parameterized Gatling simulation](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/load-test/gatling/src/arc-failover.gatling.js)
+- [The strengthened AWS and Kubernetes SDK plan validator](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/scripts/arc_experiment_sdk.py)
+- [The sanitized ARC experiment result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/evidence/experiment-result.json)
+- [The sanitized Gatling result](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/blob/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/evidence/gatling-summary.json)
+- [The publication-safe evidence images](https://github.com/bhattchaitanya/aws-arc-eks-observed-capacity-failover/tree/8c82903c3cb755d54d7af4a8fcb031571ac4ddae/evidence/screenshots)
 
 ## Measured results
 
