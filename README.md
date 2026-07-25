@@ -15,6 +15,8 @@ This experiment demonstrates an Amazon Application Recovery Controller Region Sw
 
 ![Capacity-first two-Region architecture](diagrams/architecture-medium.png)
 
+![ARC EKS sampling and destination-readiness flow](diagrams/eks-sampling-readiness.png)
+
 ## Cost envelope
 
 The modeled ready-state cost is about **$1.45/hour** and the temporary failover peak is about **$2.20/hour**, including two EKS control planes, EKS Auto Mode compute and management fees, one NAT gateway per Region, one ARC plan, two NLBs, Route 53 health checks, and the 1,000 TPS test mix of eventually consistent reads plus 1% replicated writes. Data transfer and unusually large responses would add variable cost.
@@ -39,12 +41,6 @@ Teardown is explicit:
 
 The failover script refuses to start unless `.state/history-gate.json` records a passed ARC plan evaluation.
 
-The manual GitLab jobs require a protected runner with AWS CLI v2, `kubectl`,
-`jq`, `curl`, and `zip`, plus short-lived AWS credentials for the authorized
-account. Job artifacts carry the non-secret `.state` evidence between isolated
-runners, and a shared `resource_group` prevents overlapping infrastructure
-mutations.
-
 ## SDK-driven execution and evidence
 
 The live experiment was executed and verified with the AWS and Kubernetes
@@ -59,7 +55,9 @@ python3 -m venv .state/venv
 .state/venv/bin/python scripts/arc_experiment_sdk.py destroy-key
 ```
 
-The SDK driver validates the exact three-block ARC contract, obtains
+The SDK driver validates the exact three-block ARC contract—including both
+cluster ARNs, the per-Region Kubernetes resource map, the HPA names, and the
+sampling configuration—obtains
 short-lived EKS authentication tokens, reads Deployments and HPAs through the
 Kubernetes SDK, starts and polls the ARC execution, verifies the destination
 application and DynamoDB path, and writes evidence below `.state/`.
@@ -75,8 +73,9 @@ review. Do not fail back, scale down, or tear down without explicit approval.
 
 ## Reproducible artifacts
 
-- `arc/activation-workflow.example.json` is the sanitized three-block ARC
-  activation workflow.
+- `arc/as-deployed-workflows.sanitized.json` is the exact two-workflow JSON
+  shown by the retained plan's code view, with only account and DNS identifiers
+  replaced by explicit placeholders.
 - `lambda/availability_gate.py` is the custom Lambda policy gate.
 - `load-test/gatling/src/arc-failover.gatling.js` is the parameterized Gatling
   verification.

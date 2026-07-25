@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Inside the ARC EKS observed-capacity execution block</title>
+  <desc id="desc">A simplified flow showing how ARC stores a 24-hour replica maximum, calculates a destination target, checks existing ready replicas, scales only when required, waits for readiness, and then permits the traffic step.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef3f8"/>
+    </linearGradient>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#142b4a"/>
+      <stop offset="1" stop-color="#244b78"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#17324d" flood-opacity=".14"/>
+    </filter>
+    <marker id="arrowOrange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#e87922"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 z" fill="#23855b"/>
+    </marker>
+    <style>
+      .title{font:700 42px Inter,Arial,sans-serif;fill:#10243e}
+      .subtitle{font:400 20px Inter,Arial,sans-serif;fill:#52657b}
+      .eyebrow{font:700 14px Inter,Arial,sans-serif;letter-spacing:1.6px;fill:#5b6f84}
+      .cardTitle{font:700 23px Inter,Arial,sans-serif;fill:#142b4a}
+      .body{font:400 18px Inter,Arial,sans-serif;fill:#31465d}
+      .small{font:400 15px Inter,Arial,sans-serif;fill:#52657b}
+      .mono{font:600 17px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#143b63}
+      .white{fill:#fff}
+      .pill{font:700 15px Inter,Arial,sans-serif}
+      .number{font:700 18px Inter,Arial,sans-serif;fill:#fff}
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <text x="88" y="82" class="eyebrow">AWS ARC REGION SWITCH • EKS RESOURCE SCALING</text>
+  <text x="88" y="135" class="title">How ARC turns sampled replica history into a readiness gate</text>
+  <text x="88" y="171" class="subtitle">It does not send traffic and hope that the HPA catches up. Capacity is an ordered plan step.</text>
+
+  <rect x="80" y="220" width="430" height="500" rx="24" fill="#fff" filter="url(#shadow)"/>
+  <circle cx="122" cy="266" r="20" fill="#286fbb"/>
+  <text x="116" y="273" class="number">1</text>
+  <text x="156" y="275" class="cardTitle">Collect and retain evidence</text>
+  <rect x="112" y="311" width="366" height="104" rx="16" fill="#edf5ff" stroke="#9fc6ef"/>
+  <text x="136" y="343" class="eyebrow" fill="#286fbb">SOURCE REGION • OREGON</text>
+  <text x="136" y="378" class="mono">ReplicaCount → rolling 24h max</text>
+  <text x="136" y="402" class="small">Observed maximum for arc-transaction-api: 20</text>
+  <path d="M295 423 L295 458" stroke="#286fbb" stroke-width="4" marker-end="url(#arrowOrange)"/>
+  <rect x="112" y="470" width="366" height="112" rx="16" fill="#fff7ed" stroke="#f3b277"/>
+  <text x="136" y="502" class="eyebrow" fill="#b85a16">PLAN EVALUATION</text>
+  <text x="136" y="535" class="body">Has ARC collected and stored</text>
+  <text x="136" y="561" class="body">the replica-count history?</text>
+  <rect x="112" y="614" width="366" height="72" rx="14" fill="#f7f9fc" stroke="#d1dae5"/>
+  <text x="136" y="643" class="small">Public docs define the 24-hour window.</text>
+  <text x="136" y="667" class="small">They do not publish the sampling cadence.</text>
+
+  <path d="M510 467 C545 467 557 467 586 467" fill="none" stroke="#e87922" stroke-width="5" marker-end="url(#arrowOrange)"/>
+
+  <rect x="590" y="220" width="420" height="500" rx="24" fill="#fff" filter="url(#shadow)"/>
+  <circle cx="632" cy="266" r="20" fill="#e87922"/>
+  <text x="626" y="273" class="number">2</text>
+  <text x="666" y="275" class="cardTitle">Calculate the recovery target</text>
+  <rect x="622" y="312" width="356" height="116" rx="16" fill="#fff7ed" stroke="#f3b277"/>
+  <text x="646" y="344" class="eyebrow" fill="#b85a16">THE DEPLOYED FORMULA</text>
+  <text x="646" y="384" class="mono">ceil(100% × 20) = 20</text>
+  <text x="646" y="411" class="small">targetPercent × sampled source maximum</text>
+  <rect x="622" y="455" width="356" height="94" rx="16" fill="#f5f7fa" stroke="#d4dce6"/>
+  <text x="646" y="486" class="eyebrow">NOT THE HPA CEILING</text>
+  <text x="646" y="522" class="body">HPA maxReplicas = 40</text>
+  <rect x="622" y="574" width="356" height="112" rx="16" fill="#edf5ff" stroke="#9fc6ef"/>
+  <text x="646" y="605" class="eyebrow" fill="#286fbb">EXACT RESOURCE MAP</text>
+  <text x="646" y="637" class="small">Region → cluster ARN → namespace</text>
+  <text x="646" y="662" class="small">→ Deployment name → optional HPA name</text>
+
+  <path d="M1010 467 C1045 467 1057 467 1086 467" fill="none" stroke="#e87922" stroke-width="5" marker-end="url(#arrowOrange)"/>
+
+  <rect x="1090" y="220" width="430" height="500" rx="24" fill="#fff" filter="url(#shadow)"/>
+  <circle cx="1132" cy="266" r="20" fill="#23855b"/>
+  <text x="1126" y="273" class="number">3</text>
+  <text x="1166" y="275" class="cardTitle">Verify before traffic moves</text>
+  <rect x="1122" y="311" width="366" height="78" rx="16" fill="#eef9f3" stroke="#94cfb2"/>
+  <text x="1146" y="342" class="eyebrow" fill="#23855b">DESTINATION • OHIO</text>
+  <text x="1146" y="371" class="mono">readyReplicas: 1   target: 20</text>
+
+  <polygon points="1305,414 1428,472 1305,530 1182,472" fill="#fff7ed" stroke="#e87922" stroke-width="3"/>
+  <text x="1247" y="467" class="body" font-weight="700">ready ≥ 20?</text>
+  <text x="1278" y="492" class="small">check first</text>
+
+  <path d="M1182 472 L1143 472 L1143 586 L1178 586" fill="none" stroke="#e87922" stroke-width="4" marker-end="url(#arrowOrange)"/>
+  <text x="1099" y="455" class="pill" fill="#b85a16">NO</text>
+  <rect x="1182" y="551" width="306" height="111" rx="16" fill="#fff7ed" stroke="#f3b277"/>
+  <text x="1204" y="580" class="small">1. Disable HPA scale-down</text>
+  <text x="1204" y="605" class="small">2. Update Deployment /scale</text>
+  <text x="1204" y="630" class="small">3. Node autoscaler adds capacity</text>
+  <text x="1204" y="655" class="small">4. Poll until replicas are ready</text>
+
+  <path d="M1428 472 L1480 472 L1480 686 L1436 686" fill="none" stroke="#23855b" stroke-width="4" marker-end="url(#arrowGreen)"/>
+  <text x="1442" y="455" class="pill" fill="#23855b">YES</text>
+  <rect x="1182" y="676" width="254" height="56" rx="28" fill="#23855b"/>
+  <text x="1221" y="711" class="pill white">capacity step complete</text>
+
+  <rect x="250" y="770" width="1100" height="76" rx="20" fill="url(#navy)" filter="url(#shadow)"/>
+  <text x="312" y="800" class="eyebrow white">SEQUENTIAL PLAN INVARIANT</text>
+  <text x="312" y="830" class="body white">The Route 53 execution block starts only after the EKS block completes its configured readiness threshold.</text>
+  <rect x="1214" y="788" width="102" height="40" rx="20" fill="#e87922"/>
+  <text x="1234" y="813" class="pill white">NEXT: DNS</text>
+</svg>
